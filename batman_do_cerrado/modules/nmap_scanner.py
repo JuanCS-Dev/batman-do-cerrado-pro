@@ -28,7 +28,8 @@ def _parse_xml_to_models(xml_string: str) -> List[IPAddressInfo]:
     try:
         root = ET.fromstring(xml_string)
     except ET.ParseError as e:
-        ui.print(ui.color(f"Erro fatal ao analisar o XML do Nmap: {e}", ui.RED))
+        # Em caso de XML malformado, use a função print padrão para notificar o erro.
+        print(ui.color(f"Erro fatal ao analisar o XML do Nmap: {e}", ui.RED))
         return results
 
     for host_node in root.findall("host"):
@@ -213,3 +214,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

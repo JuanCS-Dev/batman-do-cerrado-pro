@@ -13,8 +13,17 @@ import sys
 from typing import Optional, Dict, Any
 
 import requests
-from ipwhois import IPWhois
-from ipwhois.exceptions import IPDefinedError
+# Importa ipwhois de forma opcional. Se a biblioteca não estiver instalada,
+# definimos IPWhois como ``None`` e uma classe de exceção substituta para
+# IPDefinedError, evitando que falhas de importação quebrem o módulo.
+try:
+    from ipwhois import IPWhois  # type: ignore
+    from ipwhois.exceptions import IPDefinedError  # type: ignore
+except Exception:
+    IPWhois = None  # type: ignore
+    class IPDefinedError(Exception):  # type: ignore
+        """Exceção substituta usada quando ipwhois não está disponível."""
+        pass
 
 from batman_do_cerrado.core import ui, utils
 from batman_do_cerrado.core.config import config
@@ -29,18 +38,20 @@ def _query_geoip(ip: str, session: requests.Session) -> Dict[str, Any]:
     Consulta GeoIP em múltiplos provedores com fallback, inspirado no seu ip_searcher.
     Retorna o dicionário de dados brutos do primeiro provedor bem-sucedido.
     """
-    # Provedor 1: IPWhois (usando a biblioteca)
-    try:
-        obj = IPWhois(ip)
-        results = obj.lookup_whois()
-        # A biblioteca ipwhois retorna uma estrutura que podemos normalizar
-        if results and results.get("asn"):
-            return {"source": "ipwhois", "data": results}
-    except IPDefinedError:
-         # Ignora IPs privados, que não podem ser consultados
-         return {"source": "ipwhois", "data": {"error": "IP Privado"}}
-    except Exception:
-        pass # Falha, tenta o próximo
+    # Provedor 1: IPWhois (usando a biblioteca) – apenas se a biblioteca estiver disponível.
+    if IPWhois is not None:
+        try:
+            obj = IPWhois(ip)
+            results = obj.lookup_whois()
+            # A biblioteca ipwhois retorna uma estrutura que podemos normalizar
+            if results and results.get("asn"):
+                return {"source": "ipwhois", "data": results}
+        except IPDefinedError:
+            # Ignora IPs privados, que não podem ser consultados
+            return {"source": "ipwhois", "data": {"error": "IP Privado"}}
+        except Exception:
+            # Falha, tenta o próximo
+            pass
 
     # Provedor 2: ip-api.com (fallback)
     try:
@@ -201,3 +212,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

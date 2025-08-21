@@ -20,6 +20,7 @@ from typing import Dict, Optional, List, Generator, Any
 
 # Importações do nosso framework
 from batman_do_cerrado.core import ui, utils
+from batman_do_cerrado.core.config import PROJECT_ROOT as CORE_PROJECT_ROOT
 from batman_do_cerrado.core.config import config
 from batman_do_cerrado.core.models import Finding
 
@@ -51,8 +52,9 @@ class FileSystemMonitor:
         self.suid_allowlist = set(config.get('fs_monitor', 'suid_allowlist', []))
         self.exclude_globs = config.get('fs_monitor', 'default_excludes', [])
         
-        # Define os caminhos de dados e logs usando a raiz do projeto
-        self.baseline_path = utils.PROJECT_ROOT / "data" / "baselines" / "fs_baseline.json"
+        # Define os caminhos de dados e logs usando a raiz do projeto. 'utils' não possui
+        # PROJECT_ROOT, portanto usamos o valor da configuração central.
+        self.baseline_path = CORE_PROJECT_ROOT / "data" / "baselines" / "fs_baseline.json"
         
         self.baseline: Dict[str, FileState] = self._load_baseline()
         self.hash_max_bytes = 5 * 1024 * 1024 # Limite para hashing (pode ir pra config)
@@ -131,7 +133,7 @@ class FileSystemMonitor:
                             details={"size": new_state.size, "mode": oct(new_state.mode)}
                         )
                         if new_state.is_suid_root and str(path) not in self.suid_allowlist:
-                             yield Finding(
+                            yield Finding(
                                 target=str(path), module="fs_monitor", finding_type="setuid_added",
                                 description="Novo arquivo com permissão SUID perigosa.", severity="critical",
                                 details={"mode": oct(new_state.mode)}
@@ -147,10 +149,10 @@ class FileSystemMonitor:
                         )
 
                     if not old_state.is_suid_root and new_state.is_suid_root and str(path) not in self.suid_allowlist:
-                         yield Finding(
+                        yield Finding(
                             target=str(path), module="fs_monitor", finding_type="setuid_added",
                             description="Permissão SUID perigosa foi adicionada a um arquivo existente.", severity="critical",
-                            details={"mode": oct(new_state.mode)}
+                            details{"mode": oct(new_state.mode)}
                         )
                     
                     # Para arquivos grandes, o hash só é calculado se o tamanho ou mtime mudar.
@@ -161,7 +163,7 @@ class FileSystemMonitor:
                             new_hash = self._hash_file(path)
                     
                     if old_hash != new_hash:
-                         yield Finding(
+                        yield Finding(
                             target=str(path), module="fs_monitor", finding_type="file_modified",
                             description="Conteúdo do arquivo foi modificado (hash diferente).", severity="critical",
                             details={"old_hash": old_hash, "new_hash": new_hash}
@@ -227,3 +229,4 @@ if __name__ == "__main__":
     if os.geteuid() != 0:
         print(ui.color("Aviso: Para melhores resultados, execute este monitor como root.", ui.YELLOW))
     main()
+

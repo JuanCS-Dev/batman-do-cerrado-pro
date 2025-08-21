@@ -1,6 +1,0 @@
-batman_do_cerrado
-config
-data
-dist
-logs
-rules

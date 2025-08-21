@@ -60,8 +60,29 @@ class Config:
         return self._config.get(section, {}).get(key, fallback)
 
     def get_section(self, section: str) -> Dict[str, Any]:
-        """Retorna uma seção inteira do arquivo de configuração."""
-        return self._config.get(section, {})
+        """
+        Retorna uma subseção do arquivo de configuração.
+
+        Aceita nomes de seção separados por ponto para acessar níveis
+        aninhados de configuração (ex: ``"nmap_scanner.profiles"``).
+
+        Se qualquer parte do caminho não existir ou não for um dicionário,
+        retorna um dicionário vazio.
+
+        Args:
+            section: O caminho da seção separado por pontos.
+
+        Returns:
+            Um dicionário com a subseção solicitada ou um dicionário vazio.
+        """
+        keys = section.split('.')
+        data: Any = self._config
+        for key in keys:
+            if isinstance(data, dict):
+                data = data.get(key, {})
+            else:
+                return {}
+        return data if isinstance(data, dict) else {}
 
     def get_secret(self, key: str) -> str:
         """
@@ -80,3 +101,4 @@ class Config:
 # Instância única para ser importada por outros módulos.
 # Desta forma, a configuração é carregada uma única vez na inicialização.
 config = Config()
+

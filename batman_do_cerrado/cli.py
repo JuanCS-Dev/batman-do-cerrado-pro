@@ -11,7 +11,7 @@ analisa os argumentos da linha de comando e formata a apresentação dos resulta
 import argparse
 import os
 import sys
-import time # Adicionado para o sleep
+import time  # Adicionado para o sleep
 from typing import Any, List, Dict, Optional
 
 # Importações do nosso framework
@@ -54,9 +54,9 @@ def _print_ip_dossier(info: IPAddressInfo):
     if hasattr(info, 'ports') and info.ports:
         print(ui.color("\n[ PORTAS E SERVIÇOS (NMAP) ]", ui.BLUE))
         for port in sorted(info.ports, key=lambda p: p.port_id):
-             version_str = f"{port.product or ''} {port.version or ''}".strip()
-             line = f"  - {port.port_id}/{port.protocol} ({port.state}): {port.service_name or ''} {version_str}"
-             print(ui.color(line, ui.GREEN if port.state == 'open' else ui.GRAY))
+            version_str = f"{port.product or ''} {port.version or ''}".strip()
+            line = f"  - {port.port_id}/{port.protocol} ({port.state}): {port.service_name or ''} {version_str}"
+            print(ui.color(line, ui.GREEN if port.state == 'open' else ui.GRAY))
     print()
 
 def _print_domain_dossier(info: DomainInfo):
@@ -93,11 +93,11 @@ def interactive_menu():
 
     menu_items = {
         "1": {"name": "ip_analyzer", "desc": "Executa o dossiê completo para um endereço IP.", "sudo": False},
-        "2": {"name": "domain", "desc": "Executa a análise OSINT completa para um domínio.", "sudo": False},
+        "2": {"name": "domain_analyzer", "desc": "Executa a análise OSINT completa para um domínio.", "sudo": False},
         # _ALTERADO_: Corrigido o nome do módulo para corresponder ao nome do arquivo.
         "3": {"name": "nmap_scanner", "desc": "Executa uma varredura Nmap com perfis customizáveis.", "sudo": False},
-        "4": {"name": "fs", "desc": "Inicia o monitor de integridade de arquivos em tempo real.", "sudo": True},
-        "5": {"name": "net", "desc": "Inicia o monitor de rede em tempo real.", "sudo": True},
+        "4": {"name": "fs_monitor", "desc": "Inicia o monitor de integridade de arquivos em tempo real.", "sudo": True},
+        "5": {"name": "net_monitor", "desc": "Inicia o monitor de rede em tempo real.", "sudo": True},
         "9": {"name": "ai_auditor", "desc": "Inicia uma investigação autônoma com o Protocolo Oráculo.", "sudo": False, "wip": True},
     }
 
@@ -129,17 +129,25 @@ def interactive_menu():
             return
 
         module_name = selected['name']
-        kwargs = {}
+        kwargs: Dict[str, Any] = {}
         # _ALTERADO_: Verificação do nome corrigido.
-        if module_name in ["ip_analyzer", "domain", "nmap_scanner"]:
+        # Apenas módulos que exigem um alvo solicitam entrada do usuário. Use o nome canônico 'domain_analyzer'.
+        if module_name in ["ip_analyzer", "domain_analyzer", "nmap_scanner"]:
             kwargs["target"] = input(ui.color(f"  -> Alvo para '{module_name}': ", ui.GREEN)).strip()
-            if not kwargs["target"]: print(ui.color("Alvo é obrigatório.", ui.RED)); time.sleep(1); interactive_menu(); return
+            if not kwargs["target"]:
+                print(ui.color("Alvo é obrigatório.", ui.RED))
+                time.sleep(1)
+                interactive_menu()
+                return
 
         # _ALTERADO_: Lógica de menu inteligente para o Nmap Scanner.
         if module_name == "nmap_scanner":
             profiles = config.get_section('nmap_scanner.profiles')
             if not profiles:
-                print(ui.color("Nenhum perfil Nmap encontrado no settings.toml.", ui.RED)); time.sleep(1); interactive_menu(); return
+                print(ui.color("Nenhum perfil Nmap encontrado no settings.toml.", ui.RED))
+                time.sleep(1)
+                interactive_menu()
+                return
             
             print(ui.color("\nPerfis de varredura disponíveis:", ui.BLUE))
             profile_keys = list(profiles.keys())
@@ -148,10 +156,13 @@ def interactive_menu():
             
             profile_choice = input(ui.color(f"  -> Escolha um perfil [1-{len(profiles)}]: ", ui.GREEN)).strip()
             try:
-                # Converte a escolha numérica para o nome do perfil
-                kwargs["profile"] = profile_keys[int(profile_choice) - 1]
+                # Converte a escolha numérica para o nome do perfil. Use a chave 'profile_name'
+                kwargs["profile_name"] = profile_keys[int(profile_choice) - 1]
             except (ValueError, IndexError):
-                print(ui.color("Seleção inválida.", ui.RED)); time.sleep(1); interactive_menu(); return
+                print(ui.color("Seleção inválida.", ui.RED))
+                time.sleep(1)
+                interactive_menu()
+                return
         
         results = run_module(module_name, **kwargs)
         
@@ -159,7 +170,8 @@ def interactive_menu():
             _print_results(results)
 
     except (KeyboardInterrupt, EOFError):
-        print(ui.color("\n\nOperação cancelada. Saindo.", ui.YELLOW)); sys.exit(0)
+        print(ui.color("\n\nOperação cancelada. Saindo.", ui.YELLOW))
+        sys.exit(0)
         
     ui.pause()
     interactive_menu()
@@ -193,24 +205,40 @@ def main():
     p_nmap.add_argument("-p", "--profile", required=True, help="O perfil de scan (definido em settings.toml).")
     
     p_fs = subparsers.add_parser("fs", help="Inicia o monitor de integridade de arquivos.", aliases=["fs-monitor"])
-    if not is_root: p_fs.epilog = ui.color("AVISO: Recomenda-se executar este módulo como root.", ui.YELLOW)
+    if not is_root:
+        p_fs.epilog = ui.color("AVISO: Recomenda-se executar este módulo como root.", ui.YELLOW)
     
     p_net = subparsers.add_parser("net", help="Inicia o monitor de rede.", aliases=["net-monitor"])
-    if not is_root: p_net.epilog = ui.color("AVISO: Recomenda-se executar este módulo como root.", ui.YELLOW)
+    if not is_root:
+        p_net.epilog = ui.color("AVISO: Recomenda-se executar este módulo como root.", ui.YELLOW)
     
     args = parser.parse_args()
     
     module_to_run = args.module
-    # _ALTERADO_: Normaliza o alias 'nmap' para o nome canônico
-    if module_to_run == 'nmap':
-        module_to_run = 'nmap_scanner'
-    if module_to_run == 'ip':
-        module_to_run = 'ip_analyzer'
+    # _ALTERADO_: Normaliza aliases para os nomes canônicos dos módulos.
+    alias_map = {
+        "nmap": "nmap_scanner",
+        "ip": "ip_analyzer",
+        "domain": "domain_analyzer",
+        "domain-analyzer": "domain_analyzer",
+        "fs": "fs_monitor",
+        "fs-monitor": "fs_monitor",
+        "net": "net_monitor",
+        "net-monitor": "net_monitor",
+    }
+    module_to_run = alias_map.get(module_to_run, module_to_run)
 
-    results = run_module(module_to_run, **vars(args))
+    # Remove a chave "module" dos argumentos antes de repassar para o módulo de análise.
+    params: Dict[str, Any] = vars(args).copy()
+    params.pop("module", None)
+    # Ajusta o nome do parâmetro de perfil para o Nmap Scanner. A função analyze usa 'profile_name'.
+    if module_to_run == "nmap_scanner" and "profile" in params:
+        params["profile_name"] = params.pop("profile")
+    results = run_module(module_to_run, **params)
     
     if results:
         _print_results(results)
 
 if __name__ == "__main__":
     main()
+
