@@ -1,0 +1,71 @@
+# ======================================================
+# Arquivo de Configuração Principal - Batman do Cerrado
+# ======================================================
+# Este arquivo controla o comportamento padrão de todos os módulos.
+# As configurações aqui podem ser sobrescritas por argumentos de linha de comando.
+
+[core]
+# Chaves de API.
+# Melhor prática: Deixe em branco aqui e defina como variáveis de ambiente.
+# O código buscará a variável de ambiente primeiro (ex: IPINFO_TOKEN).
+ipinfo_token = ""
+ipqualityscore_key = ""
+
+
+[nmap_scanner]
+# Perfis de varredura do Nmap.
+# O usuário pode adicionar, remover ou modificar perfis aqui.
+# A chave (ex: "rapido") é o nome do perfil.
+# O valor é a string de argumentos para o Nmap.
+[nmap_scanner.profiles]
+rapido      = "-T4 --top-ports 100 --open -sS -Pn"
+padrao      = "-T3 -sS -sV --open -Pn"
+profundo    = "-T3 -sS -sV -A --open -Pn"
+inteligente = "-T4 -sS -sV --open -Pn --script default,discovery,safe --version-intensity 7"
+stealth     = "-T2 -sS -sV -f --scan-delay 500ms -Pn"
+
+
+[fs_monitor]
+# Configurações do monitor de integridade de arquivos.
+default_paths = [
+    "/etc",
+    "/root/.ssh", # Usaremos uma forma de expandir o '~' no código
+    "/home/batman/.ssh" # Exemplo de caminho de usuário
+]
+
+# Binários SUID que são considerados seguros e não devem gerar alertas na baseline.
+# Use caminhos absolutos.
+suid_allowlist = [
+    "/usr/bin/sudo",
+    "/usr/bin/su",
+    "/usr/bin/passwd",
+    "/usr/bin/mount",
+    "/usr/bin/umount",
+    "/usr/bin/pkexec",
+    "/usr/bin/chsh",
+    "/usr/bin/chfn",
+    "/usr/bin/gpasswd",
+    "/usr/bin/newgrp"
+]
+
+# Padrões glob para excluir arquivos da verificação.
+default_excludes = [
+    "*.pyc",
+    "*.cache*",
+    "/etc/ssl/*",
+    "/etc/ld.so.cache",
+    "/var/log/*",
+    "/var/lib/dpkg/info/*"
+]
+
+
+[net_monitor]
+# Limiares padrão para detecção de anomalias de rede.
+window_seconds = 12
+spike_threshold = 30
+syn_recv_threshold = 60
+
+
+[secrets_scanner]
+# Caminho para o arquivo de regras do scanner de segredos.
+rules_file = "rules/default_rules.json"
