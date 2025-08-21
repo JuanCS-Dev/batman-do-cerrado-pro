@@ -9,6 +9,7 @@ retornando objetos de dados padronizados para integração com outros módulos.
 
 import re
 import json
+import socket
 from typing import Dict, List, Optional, Union, Any
 
 from batman_do_cerrado.core import ui, utils

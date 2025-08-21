@@ -1,79 +1,44 @@
-# ======================================================
-# Arquivo de Configuração Principal - Batman do Cerrado
-# ======================================================
-# Este arquivo controla o comportamento padrão de todos os módulos.
-# As configurações aqui podem ser sobrescritas por argumentos de linha de comando.
+# batman-do-cerrado-pro/pyproject.toml
 
-[core]
-# Chaves de API.
-# Melhor prática: Deixe em branco aqui e defina como variáveis de ambiente.
-# O código buscará a variável de ambiente primeiro (ex: IPINFO_TOKEN).
-ipinfo_token = ""
-abuseipdb_key = ""
-ipqualityscore_key = ""
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
 
-
-[nmap_scanner]
-# Perfis de varredura do Nmap.
-# O usuário pode adicionar, remover ou modificar perfis aqui.
-# A chave (ex: "rapido") é o nome do perfil.
-# O valor é a string de argumentos para o Nmap.
-[nmap_scanner.profiles]
-rapido      = "-T4 --top-ports 100 --open -sS -Pn"
-padrao      = "-T3 -sS -sV --open -Pn"
-profundo    = "-T3 -sS -sV -A --open -Pn"
-inteligente = "-T4 -sS -sV --open -Pn --script default,discovery,safe --version-intensity 7"
-stealth     = "-T2 -sS -f --scan-delay 500ms -Pn"
-
-
-[fs_monitor]
-# Configurações do monitor de integridade de arquivos.
-default_paths = [
-    "/etc",
-    "~/.ssh", # O código expandirá o '~' para o diretório home do usuário
+[project]
+name = "batman-do-cerrado-juancs"
+version = "2.0.0a3"  # _ALTERADO_: Versão final da Fase 2.
+authors = [
+    { name = "Juan Carlos", email = "juan.brainfarma@gmail.com" },
+    { name = "Cora" },
+]
+description = "Suíte de segurança pessoal multifacetada para OSINT, Forense e Defesa de Sistemas."
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "tomli; python_version < '3.11'",
+    "requests>=2.28.0",
+    "ipwhois>=1.2.0",
+]
+license = "MIT"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Topic :: System :: Monitoring",
 ]
 
-# Binários SUID que são considerados seguros e não devem gerar alertas na baseline.
-# Use caminhos absolutos.
-suid_allowlist = [
-    "/usr/bin/sudo",
-    "/usr/bin/su",
-    "/usr/bin/passwd",
-    "/usr/bin/mount",
-    "/usr/bin/umount",
-    "/usr/bin/pkexec",
-    "/usr/bin/chsh",
-    "/usr/bin/chfn",
-    "/usr/bin/gpasswd",
-    "/usr/bin/newgrp"
-]
+[project.scripts]
+batman = "batman_do_cerrado.cli:main"
 
-# Padrões glob para excluir arquivos da verificação.
-default_excludes = [
-    "*.pyc",
-    "*.cache*",
-    "/etc/ssl/*",
-    "/etc/ld.so.cache",
-    "/var/log/*",
-    "/var/lib/dpkg/info/*"
-]
+[project.urls]
+"Homepage" = "https://github.com/JuanCS-Dev/batman-do-cerrado-pro"
+"Repository" = "https://github.com/JuanCS-Dev/batman-do-cerrado-pro"
+"Bug Tracker" = "https://github.com/JuanCS-Dev/batman-do-cerrado-pro/issues"
 
-
-[secrets_scanner]
-# Caminho para o arquivo de regras do scanner de segredos.
-rules_file = "rules/default_rules.json"
-
-
-[net_monitor] # _NOVO_
-# Configurações do monitor de rede em tempo real.
-window_seconds = 12
-spike_threshold = 30
-syn_recv_threshold = 60
-geo_enabled = false
-
-# Listas de permissão/bloqueio. Deixe vazio para não usar.
-# Exemplos: allow_ips = ["1.1.1.1"], block_ports = [23, 135, 137, 139]
-allow_ips = []
-block_ips = []
-allow_ports = []
-block_ports = []
+[tool.setuptools.packages.find]
+# _ALTERADO_: Agora excluímos explicitamente a pasta de testes do pacote final.
+exclude = ["tests*"]

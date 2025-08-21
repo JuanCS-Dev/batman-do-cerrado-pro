@@ -1,0 +1,12 @@
+# Arquivo .dockerignore
+# Impede que arquivos e pastas desnecessários sejam copiados para a imagem Docker.
+
+.git
+.venv
+__pycache__/
+*.pyc
+*.egg-info
+dist/
+build/
+.dockerignore
+Dockerfile

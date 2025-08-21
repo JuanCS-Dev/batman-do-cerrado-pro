@@ -1,0 +1,2 @@
+[console_scripts]
+batman = batman_do_cerrado.cli:main
