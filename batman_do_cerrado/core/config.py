@@ -2,103 +2,83 @@
 
 """
 Módulo Core Config - Ponto de acesso único para todas as configurações.
-
-Lê o arquivo settings.toml e disponibiliza os valores de forma segura,
-com suporte para fallbacks e leitura de variáveis de ambiente para segredos.
 """
 
 import os
 from pathlib import Path
+from typing import Any, Dict, Optional
+
+# ===================================================================
+# ================= BLOCO DE DEPURAÇÃO ADICIONADO ===================
+print("--- DEBUG: Iniciando a execução de core/config.py ---", flush=True)
+settings_path_from_env = os.environ.get("BATMAN_SETTINGS_PATH")
+print(f"DEBUG: Valor lido da variável de ambiente 'BATMAN_SETTINGS_PATH': {settings_path_from_env}", flush=True)
+if settings_path_from_env:
+    p = Path(settings_path_from_env)
+    print(f"DEBUG: Objeto Path criado: {p}", flush=True)
+    print(f"DEBUG: Verificando se o arquivo existe com p.is_file()...", flush=True)
+    is_file_result = p.is_file()
+    print(f"DEBUG: Resultado de p.is_file(): {is_file_result}", flush=True)
+print("--- FIM DO BLOCO DE DEPURAÇÃO ---", flush=True)
+# ===================================================================
+# ===================================================================
+
 
 # Tratamento de compatibilidade para a biblioteca TOML
 try:
     import tomllib
 except ImportError:
-    # Para Python < 3.11, usamos a biblioteca de retrocompatibilidade 'tomli'
     import tomli as tomllib
 
-from typing import Any, Dict
-
-# --- Constantes ---
-# A raiz do projeto é o diretório pai da pasta 'batman_do_cerrado'
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "settings.toml"
-
-# --- O Leitor de Configuração ---
-
 class Config:
-    """
-    Uma classe singleton para carregar e servir configurações do arquivo TOML.
-    """
-    _instance = None
+    _instance: Optional['Config'] = None
     _config: Dict[str, Any] = {}
 
     def __new__(cls, *args, **kwargs):
         if not cls._instance:
             cls._instance = super().__new__(cls)
-            cls._instance._load_config()
+            config_path = cls._instance._find_config_path()
+            cls._instance._load_config(config_path)
         return cls._instance
 
-    def _load_config(self, path: Path = DEFAULT_CONFIG_PATH):
-        """Carrega o arquivo TOML. Chamado apenas uma vez."""
-        if not path.is_file():
-            # Em um cenário real, poderíamos logar um aviso ou erro aqui.
-            # Por enquanto, operamos com um dicionário vazio se o arquivo não existir.
-            print(f"AVISO: Arquivo de configuração não encontrado em {path}", flush=True)
+    def _find_config_path(self) -> Optional[Path]:
+        if env_path_str := os.environ.get("BATMAN_SETTINGS_PATH"):
+            env_path = Path(env_path_str)
+            if env_path.is_file():
+                return env_path
+
+        cwd = Path.cwd()
+        possible_paths = [
+            cwd / "config" / "settings.toml",
+            cwd.parent / "config" / "settings.toml",
+        ]
+        for path in possible_paths:
+            if path.is_file():
+                return path
+        
+        return None
+
+    def _load_config(self, path: Optional[Path]):
+        if not path or not path.is_file():
+            print(f"AVISO: Arquivo de configuração não encontrado. Operando com configurações padrão.", flush=True)
             self._config = {}
             return
 
+        print(f"INFO: Carregando configuração de {path}", flush=True)
         with open(path, "rb") as f:
             self._config = tomllib.load(f)
 
     def get(self, section: str, key: str, fallback: Any = None) -> Any:
-        """
-        Busca um valor de uma seção específica.
-
-        Ex: config.get('nmap_scanner', 'default_profile', 'padrao')
-        """
         return self._config.get(section, {}).get(key, fallback)
 
     def get_section(self, section: str) -> Dict[str, Any]:
-        """
-        Retorna uma subseção do arquivo de configuração.
-
-        Aceita nomes de seção separados por ponto para acessar níveis
-        aninhados de configuração (ex: ``"nmap_scanner.profiles"``).
-
-        Se qualquer parte do caminho não existir ou não for um dicionário,
-        retorna um dicionário vazio.
-
-        Args:
-            section: O caminho da seção separado por pontos.
-
-        Returns:
-            Um dicionário com a subseção solicitada ou um dicionário vazio.
-        """
-        keys = section.split('.')
-        data: Any = self._config
-        for key in keys:
-            if isinstance(data, dict):
-                data = data.get(key, {})
-            else:
-                return {}
-        return data if isinstance(data, dict) else {}
+        return self._config.get(section, {})
 
     def get_secret(self, key: str) -> str:
-        """
-        Busca um valor "secreto" de forma inteligente e segura.
-        1. Tenta a variável de ambiente (em maiúsculas).
-        2. Tenta o arquivo de configuração (na seção [core]).
-        3. Retorna uma string vazia.
-        """
         env_var = key.upper()
         value = os.environ.get(env_var)
         if value:
             return value
-        
         return self.get('core', key, "")
 
-# Instância única para ser importada por outros módulos.
-# Desta forma, a configuração é carregada uma única vez na inicialização.
 config = Config()
-

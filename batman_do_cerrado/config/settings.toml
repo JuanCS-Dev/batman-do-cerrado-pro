@@ -29,8 +29,8 @@ stealth     = "-T2 -sS -sV -f --scan-delay 500ms -Pn"
 # Configurações do monitor de integridade de arquivos.
 default_paths = [
     "/etc",
-    "/root/.ssh", # Usaremos uma forma de expandir o '~' no código
-    "/home/batman/.ssh" # Exemplo de caminho de usuário
+    "/root/.ssh",
+    "/home/batman/.ssh"
 ]
 
 # Binários SUID que são considerados seguros e não devem gerar alertas na baseline.

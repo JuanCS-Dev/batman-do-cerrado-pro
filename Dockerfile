@@ -13,7 +13,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN python3 -m venv /app/venv
-# _ALTERADO_: Usamos o caminho explícito do pip do venv
 RUN /app/venv/bin/pip install .
 
 # --- ESTÁGIO 2: A Imagem Final ---
@@ -26,13 +25,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/venv /app/venv
-
-# _ALTERADO_: Copiamos o diretório de configuração para a imagem final
-# para que o core.config.py possa encontrar o settings.toml.
 COPY --from=builder /app/config /app/config
 
-# _ALTERADO_: ENTRYPOINT agora é um script shell para mais controle
-# Ele ativa o venv e então executa qualquer comando passado (ou nenhum)
-ENTRYPOINT ["/bin/bash", "-c", "source /app/venv/bin/activate && batman \"$@\""]
+# _ALTERADO_: Definimos uma variável de ambiente para que o config.py
+# saiba exatamente onde encontrar o arquivo de configuração.
+ENV BATMAN_SETTINGS_PATH="/app/config/settings.toml"
 
-# _REMOVIDO_: A linha CMD foi removida para permitir o modo interativo puro.
+ENTRYPOINT ["/bin/bash", "-c", "source /app/venv/bin/activate && batman \"$@\""]

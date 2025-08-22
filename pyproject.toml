@@ -5,8 +5,9 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "batman-do-cerrado-juancs"
-version = "2.0.0a3"  # _ALTERADO_: Versão final da Fase 2.
+# _ALTERADO_: Nome do pacote mais profissional para publicação.
+name = "batman-do-cerrado-pro" 
+version = "2.0.0a3"
 authors = [
     { name = "Juan Carlos", email = "juan.brainfarma@gmail.com" },
     { name = "Cora" },
@@ -19,14 +20,22 @@ dependencies = [
     "requests>=2.28.0",
     "ipwhois>=1.2.0",
 ]
-license = "MIT"
+# _ALTERADO_: Referência explícita ao arquivo de licença.
+license = { file = "LICENSE" }
+# _ALTERADO_: Classificadores mais detalhados para melhor descoberta no PyPI.
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Topic :: Security",
     "Topic :: System :: Monitoring",
 ]
@@ -39,6 +48,14 @@ batman = "batman_do_cerrado.cli:main"
 "Repository" = "https://github.com/JuanCS-Dev/batman-do-cerrado-pro"
 "Bug Tracker" = "https://github.com/JuanCS-Dev/batman-do-cerrado-pro/issues"
 
+[tool.setuptools]
+# _ADICIONADO_: Instrução para incluir arquivos que não são .py definidos abaixo.
+include-package-data = true
+
 [tool.setuptools.packages.find]
-# _ALTERADO_: Agora excluímos explicitamente a pasta de testes do pacote final.
 exclude = ["tests*"]
+
+# _ADICIONADO_: Diz explicitamente ao setuptools para empacotar quaisquer arquivos .toml
+# que ele encontrar dentro dos subdiretórios do pacote.
+[tool.setuptools.package-data]
+"batman_do_cerrado" = ["**/*.toml"]
