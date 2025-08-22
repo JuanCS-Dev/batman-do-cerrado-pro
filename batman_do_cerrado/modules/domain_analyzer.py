@@ -1,10 +1,11 @@
 # batman-do-cerrado-pro/batman_do_cerrado/modules/domain_analyzer.py
 
 """
-Módulo Domain Analyzer (Refatorado) - Batman do Cerrado
+Módulo Domain Analyzer (Refatorado e Robusto) - Batman do Cerrado
 
 Realiza uma análise OSINT profunda em um domínio, unificando consultas
 DNS, análise de e-mail, fingerprinting HTTP/TLS e busca por subdomínios.
+Agora com robustez, tratamento de exceções e saídas formatadas.
 """
 
 import argparse
@@ -62,19 +63,25 @@ def _parse_dmarc(dmarc_records: List[str]) -> Optional[Dict[str, Any]]:
 # --- Funções de Coleta de Dados ---
 
 def _query_dns(domain: str) -> Dict[str, List[str]]:
-    """Coleta os principais registros DNS para um domínio."""
+    """Coleta os principais registros DNS para um domínio, com tratamento de erros."""
     print(ui.color("  -> Coletando registros DNS...", ui.GRAY))
     records = {}
     record_types = ["A", "AAAA", "MX", "NS", "TXT", "SOA", "CAA", "DS"]
     for rec_type in record_types:
-        result = utils.run_command(["dig", "+short", domain, rec_type])
-        if result.success:
-            records[rec_type] = result.stdout.splitlines()
+        try:
+            result = utils.run_command(["dig", "+short", domain, rec_type])
+            if result.success:
+                records[rec_type] = result.stdout.splitlines()
+        except Exception as e:
+            print(ui.color(f"    [!] Falha ao consultar tipo {rec_type}: {e}", ui.YELLOW))
     
     # Consulta DMARC separadamente
-    dmarc_result = utils.run_command(["dig", "+short", f"_dmarc.{domain}", "TXT"])
-    if dmarc_result.success:
-        records["_DMARC"] = dmarc_result.stdout.splitlines()
+    try:
+        dmarc_result = utils.run_command(["dig", "+short", f"_dmarc.{domain}", "TXT"])
+        if dmarc_result.success:
+            records["_DMARC"] = dmarc_result.stdout.splitlines()
+    except Exception as e:
+        print(ui.color(f"    [!] Falha ao consultar DMARC: {e}", ui.YELLOW))
         
     return records
 
@@ -84,10 +91,13 @@ def _test_axfr(domain: str, ns_records: List[str]) -> bool:
     if not ns_records: return False
     
     for ns in ns_records:
-        result = utils.run_command(["dig", f"@{ns.rstrip('.')}", domain, "AXFR"])
-        if result.success and "Transfer failed." not in result.stdout and "XFR size" in result.stdout:
-            # Sucesso! A transferência de zona está aberta em pelo menos um NS.
-            return True
+        try:
+            result = utils.run_command(["dig", f"@{ns.rstrip('.')}", domain, "AXFR"])
+            if result.success and "Transfer failed." not in result.stdout and "XFR size" in result.stdout:
+                # Sucesso! A transferência de zona está aberta em pelo menos um NS.
+                return True
+        except Exception as e:
+            print(ui.color(f"    [!] Falha ao testar AXFR em {ns}: {e}", ui.YELLOW))
     return False
 
 def _fetch_http_headers(url: str, session: requests.Session) -> Dict[str, Any]:
@@ -104,9 +114,8 @@ def _fetch_http_headers(url: str, session: requests.Session) -> Dict[str, Any]:
             "title": title_parser.title.strip(),
             "redirect_location": resp.headers.get("Location")
         }
-    except requests.RequestException:
-        return {"error": "Falha na conexão"}
-
+    except requests.RequestException as e:
+        return {"error": f"Falha na conexão: {e}"}
 
 def _get_cert_info(domain: str) -> Optional[Dict[str, Any]]:
     """Obtém informações do certificado TLS de um domínio."""
@@ -127,14 +136,18 @@ def _get_cert_info(domain: str) -> Optional[Dict[str, Any]]:
                     "not_before": cert.get("notBefore"),
                     "not_after": cert.get("notAfter"),
                 }
-    except (socket.gaierror, ssl.SSLError, socket.timeout):
+    except (socket.gaierror, ssl.SSLError, socket.timeout) as e:
+        print(ui.color(f"    [!] Falha ao obter certificado TLS: {e}", ui.YELLOW))
         return None # Erros esperados se o host não resolver ou não tiver TLS
+    except Exception as e:
+        print(ui.color(f"    [!] Erro inesperado ao buscar TLS: {e}", ui.RED))
+        return None
 
 # --- Orquestrador Principal ---
 
 def analyze(target: str) -> Optional[DomainInfo]:
     """
-    Orquestra a análise completa de um domínio.
+    Orquestra a análise completa de um domínio. Saídas tratadas e robustas.
     """
     print(ui.color(f"\nIniciando análise completa para o domínio: {target}", ui.CYAN))
 
@@ -166,8 +179,21 @@ def analyze(target: str) -> Optional[DomainInfo]:
 
     return info
 
+def _format_dict(d: Dict, level=1, prefix="  ") -> str:
+    """Formata dicionários aninhados para saída legível."""
+    lines = []
+    for k, v in d.items():
+        if isinstance(v, dict):
+            lines.append(f"{prefix*level}{k}:")
+            lines.append(_format_dict(v, level+1, prefix))
+        elif isinstance(v, list):
+            lines.append(f"{prefix*level}{k}: {', '.join(str(x) for x in v)}")
+        else:
+            lines.append(f"{prefix*level}{k}: {v}")
+    return "\n".join(lines)
+
 def _print_results(info: DomainInfo):
-    """Imprime o dossiê completo do Domínio de forma organizada."""
+    """Imprime o dossiê completo do Domínio de forma organizada e tratada."""
     ui.print_banner()
     print(ui.color(f"--- Dossiê do Domínio: {info.domain_name} ---", ui.BOLD + ui.CYAN))
 
@@ -182,23 +208,34 @@ def _print_results(info: DomainInfo):
     print(f"  {'MX (Mail Exchanger):':<15} {', '.join(r['raw'] for r in info.mx_records) or 'Nenhum'}")
     print(f"  {'SPF:':<15} {info.spf.get('raw', 'Não encontrado')}")
     print(f"  {'DMARC:':<15} {info.dmarc.get('raw', 'Não encontrado')}")
-    
+
     # Seção Segurança DNS
     print(ui.color("\n[ SEGURANÇA DNS ]", ui.BLUE))
     axfr_status = ui.color("ABERTA (VULNERÁVEL!)", ui.RED + ui.BOLD) if info.is_axfr_open else ui.color("Fechada", ui.GREEN)
     print(f"  {'Transferência de Zona (AXFR):':<35} {axfr_status}")
-    
+
     # Seção Web
     print(ui.color("\n[ FINGERPRINT WEB (HTTP/HTTPS) ]", ui.BLUE))
     http = info.raw_data.get("http", {})
     https = info.raw_data.get("https.pre-redirect", {})
     tls = info.raw_data.get("tls", {})
-    print(f"  {'HTTP (porta 80):':<25} Status {http.get('status_code', '-')}, Redireciona para -> {http.get('redirect_location', 'N/A')}")
-    print(f"  {'HTTPS (porta 443):':<25} Status {https.get('status_code', '-')}, Título: '{https.get('title', 'N/A')}'")
+    if "error" in http:
+        print(f"  {'HTTP (porta 80):':<25} Erro: {http['error']}")
+    else:
+        print(f"  {'HTTP (porta 80):':<25} Status {http.get('status_code', '-')}, Redireciona para -> {http.get('redirect_location', 'N/A')}")
+    if "error" in https:
+        print(f"  {'HTTPS (porta 443):':<25} Erro: {https['error']}")
+    else:
+        print(f"  {'HTTPS (porta 443):':<25} Status {https.get('status_code', '-')}, Título: '{https.get('title', 'N/A')}'")
     if tls:
         print(f"  {'Certificado TLS Issuer:':<25} {tls.get('issuer_cn', 'N/A')}")
         print(f"  {'Certificado TLS Expira em:':<25} {tls.get('not_after', 'N/A')}")
-    
+    else:
+        print(f"  {'Certificado TLS:':<25} Não foi possível obter informações.")
+
+    # Extra (raw data)
+    print(ui.color("\n[ RAW DATA (DEBUG) ]", ui.GRAY))
+    print(_format_dict(info.raw_data, level=2, prefix="    "))
     print()
 
 def main():
@@ -213,7 +250,7 @@ def main():
     args = parser.parse_args()
 
     ui.print_banner()
-    print(ui.color("Módulo de Análise de Domínios (Refatorado)", ui.CYAN))
+    print(ui.color("Módulo de Análise de Domínios (Robusto)", ui.CYAN))
     
     target = args.target
     if not target:
@@ -225,11 +262,16 @@ def main():
     if not target:
         print(ui.color("Nenhum alvo fornecido.", ui.RED)); return
 
-    result = analyze(target)
-    if result:
-        _print_results(result)
-    else:
-        print(ui.color(f"\nA análise falhou para o alvo {target}.", ui.RED))
+    try:
+        result = analyze(target)
+        if result:
+            _print_results(result)
+        else:
+            print(ui.color(f"\nA análise falhou para o alvo {target}.", ui.RED))
+    except Exception as e:
+        print(ui.color(f"Erro inesperado durante análise: {e}", ui.RED))
+        if config.get("debug", False):
+            import traceback; traceback.print_exc()
 
 if __name__ == "__main__":
     main()

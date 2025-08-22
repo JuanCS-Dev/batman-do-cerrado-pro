@@ -1,189 +1,440 @@
-# batman-do-cerrado-pro/batman_do_cerrado/cli.py
+# batman_do_cerrado/cli.py
+# -*- coding: utf-8 -*-
 
 """
-Módulo CLI Principal (Refatorado) - Batman do Cerrado
+CLI principal — Batman do Cerrado
+UI/UX aprimorado; resiliente a diferenças no core.ui; sem dependências novas.
 
-Este é o ponto de entrada principal ('entry point') do framework quando instalado.
-Ele orquestra a chamada para todos os outros módulos através do dispatcher,
-analisa os argumentos da linha de comando e formata a apresentação dos resultados.
+Recursos:
+- Menu interativo com cores e emojis (fallbacks p/ evitar KeyError)
+- Helper `c(text, *styles)` que compõe múltiplos estilos em um só (ui.color simples)
+- Impressão padronizada de resultados (IP, Domínio, Findings)
+- Subcomandos (modo não interativo) espelhando o menu
+
+Author: Juan Carlos
 """
 
+from __future__ import annotations
 import argparse
 import os
 import sys
-import time  # Adicionado para o sleep
-from typing import Any, List, Dict, Optional
+import time
+from typing import Any, Dict, List, Optional, Sequence
 
-# Importações do nosso framework
+# Núcleo do projeto (já existe no repo)
 from .core import ui
 from .core.dispatcher import run_module
 from .core.models import IPAddressInfo, DomainInfo, Finding
-# _ALTERADO_: Importamos o objeto 'config' para ler o settings.toml
 from .core.config import config
 
-# --- (As funções _print_... permanecem exatamente as mesmas) ---
-def _print_results(results: Any):
-    if not results:
-        print(ui.color("\nNenhum resultado retornado pelo módulo.", ui.YELLOW))
-        return
-    if isinstance(results, IPAddressInfo): _print_ip_dossier(results)
-    elif isinstance(results, DomainInfo): _print_domain_dossier(results)
-    elif isinstance(results, list) and results and isinstance(results[0], Finding): _print_findings_list(results)
-    else:
-        print(ui.color("\n--- RESULTADO GENÉRICO ---", ui.CYAN)); from pprint import pprint; pprint(results)
+# ======================================================
+# Emojis, Cores, e Helpers com Design Moderno
+# ======================================================
+EMOJI: Dict[str, str] = {
+    "bat": "🦇",
+    "ok": "✅",
+    "warn": "⚠️",
+    "err": "❌",
+    "info": "ℹ️",
+    "scan": "📡",
+    "net": "🌐",
+    "file": "📄",
+    "shield": "🛡️",
+    "target": "🎯",
+    "mail": "✉️",
+    "gear": "⚙️",
+    "spark": "✨",
+    "search": "🔎",
+    "arrow": "➜",
+    "star": "★",
+    "check": "✔",
+    "x": "✗",
+    "clock": "⏰",
+    "rocket": "🚀",
+    "dot": "•",
+}
 
-def _print_ip_dossier(info: IPAddressInfo):
-    print(ui.color(f"\n--- Dossiê do IP: {info.ip} ---", ui.BOLD + ui.CYAN))
-    print(ui.color("\n[ DADOS DE REDE E DNS ]", ui.BLUE))
-    print(f"  {'ISP/Organização:':<20} {info.isp or 'N/A'}")
-    asn = f"AS{info.asn_number}" if info.asn_number else "N/A"
-    print(f"  {'ASN:':<20} {asn} ({info.asn_name or 'N/A'})")
-    print(f"  {'DNS Reverso (PTR):':<20} {info.ptr or 'Nenhum'}")
-    print(ui.color("\n[ GEOLOCALIZAÇÃO ]", ui.BLUE))
-    print(f"  {'Cidade:':<20} {info.city or 'N/A'}")
-    print(f"  {'País:':<20} {info.country_code or 'N/A'}")
-    rep = info.raw_data.get("reputation", {})
-    if rep:
-        print(ui.color("\n[ REPUTAÇÃO (ABUSEIPDB) ]", ui.BLUE))
-        if "error" in rep: print(ui.color(f"  Erro: {rep['error']}", ui.YELLOW))
-        else:
-            score = rep.get('abuseConfidenceScore', 0)
-            score_color = ui.GREEN if score < 25 else (ui.YELLOW if score < 75 else ui.RED)
-            print(f"  {'Pontuação de Abuso:':<20} {ui.color(str(score), ui.BOLD + score_color)} / 100")
-    
-    if hasattr(info, 'ports') and info.ports:
-        print(ui.color("\n[ PORTAS E SERVIÇOS (NMAP) ]", ui.BLUE))
-        for port in sorted(info.ports, key=lambda p: p.port_id):
-            version_str = f"{port.product or ''} {port.version or ''}".strip()
-            line = f"  - {port.port_id}/{port.protocol} ({port.state}): {port.service_name or ''} {version_str}"
-            print(ui.color(line, ui.GREEN if port.state == 'open' else ui.GRAY))
-    print()
+def _emoji(key: str) -> str:
+    return EMOJI.get(key, EMOJI["spark"])
 
-def _print_domain_dossier(info: DomainInfo):
-    print(ui.color(f"\n--- Dossiê do Domínio: {info.domain_name} ---", ui.BOLD + ui.CYAN))
-    print(ui.color("\n[ REGISTROS DNS PRINCIPAIS ]", ui.BLUE))
-    print(f"  {'A (IPv4):':<25} {', '.join(info.a_records) or 'Nenhum'}")
-    print(f"  {'NS (Servidores de Nomes):':<25} {', '.join(info.ns_records) or 'Nenhum'}")
-    print(ui.color("\n[ ANÁLISE DE E-MAIL ]", ui.BLUE))
-    print(f"  {'MX (Mail Exchanger):':<25} {', '.join(r['raw'] for r in info.mx_records) or 'Nenhum'}")
-    print(f"  {'SPF:':<25} {info.spf.get('raw', 'Não encontrado')}")
-    print(f"  {'DMARC:':<25} {info.dmarc.get('raw', 'Não encontrado')}")
-    axfr_status = ui.color("ABERTA (VULNERÁVEL!)", ui.RED + ui.BOLD) if info.is_axfr_open else ui.color("Fechada", ui.GREEN)
-    print(f"  {'Transferência de Zona (AXFR):':<25} {axfr_status}")
-    print()
+# Fallback seguro para constantes de cor/estilo (alguns ui.py podem não ter tudo)
+def _get(attr: str, default: str = "") -> str:
+    return getattr(ui, attr, default)
 
-def _print_findings_list(findings: List[Finding]):
-    for finding in findings:
-        color = ui.RED if finding.severity == "critical" else (ui.YELLOW if finding.severity in ("high", "medium") else ui.CYAN)
-        print(ui.color(f"\n[ALERTA] {finding.description}", ui.BOLD + color))
-        print(f"  - Alvo: {finding.target}")
-        print(f"  - Módulo: {finding.module} ({finding.finding_type})")
-        for key, value in finding.details.items():
-            print(f"  - {key.replace('_', ' ').capitalize()}: {value}")
-    print()
-
-# --- Lógica do Menu Interativo ---
-
-def interactive_menu():
-    """Exibe o menu principal e lida com a seleção do usuário."""
-    ui.clear_screen()
-    ui.print_banner()
-    
-    print(ui.color("Selecione um módulo para iniciar a análise:", ui.BOLD))
-
-    menu_items = {
-        "1": {"name": "ip_analyzer", "desc": "Executa o dossiê completo para um endereço IP.", "sudo": False},
-        "2": {"name": "domain_analyzer", "desc": "Executa a análise OSINT completa para um domínio.", "sudo": False},
-        # _ALTERADO_: Corrigido o nome do módulo para corresponder ao nome do arquivo.
-        "3": {"name": "nmap_scanner", "desc": "Executa uma varredura Nmap com perfis customizáveis.", "sudo": False},
-        "4": {"name": "fs_monitor", "desc": "Inicia o monitor de integridade de arquivos em tempo real.", "sudo": True},
-        "5": {"name": "net_monitor", "desc": "Inicia o monitor de rede em tempo real.", "sudo": True},
-        "9": {"name": "ai_auditor", "desc": "Inicia uma investigação autônoma com o Protocolo Oráculo.", "sudo": False, "wip": True},
-    }
-
-    print(ui.color("\n[ ANÁLISE E OSINT ]", ui.BLUE))
-    for key, item in menu_items.items():
-        if key in "123":
-            wip_tag = ui.color(" (em breve)", ui.GRAY) if item.get("wip") else ""
-            print(f"  {ui.color(key, ui.GREEN)}) {item['name']:<15} - {item['desc']}{wip_tag}")
-
-    print(ui.color("\n[ DEFESA E MONITORAMENTO ]", ui.BLUE))
-    for key, item in menu_items.items():
-        if key in "45":
-            sudo_tag = ui.color(" (Requer sudo)", ui.YELLOW) if item.get("sudo") else ""
-            print(f"  {ui.color(key, ui.GREEN)}) {item['name']:<15} - {item['desc']}{sudo_tag}")
-
-    print(ui.color("\n[ INTELIGÊNCIA ARTIFICIAL ]", ui.BLUE))
-    for key, item in menu_items.items():
-        if key in "9":
-            wip_tag = ui.color(" (em breve)", ui.GRAY) if item.get("wip") else ""
-            print(f"  {ui.color(key, ui.GREEN)}) {item['name']:<15} - {item['desc']}{wip_tag}")
-
+def c(text: str, *styles: str) -> str:
+    if not styles:
+        return text
+    combo = "".join(s for s in styles if isinstance(s, str))
     try:
-        choice = input(ui.color("\nEscolha uma opção (ou 'q' para sair): ", ui.BOLD + ui.CYAN)).strip()
-        if choice.lower() in ['q', 'quit', 'sair']: sys.exit(0)
-        
-        selected = menu_items.get(choice) or next((item for item in menu_items.values() if item['name'] == choice), None)
+        return ui.color(text, combo)
+    except Exception:
+        # Se ui.color tiver assinatura inesperada, devolve sem cor
+        return text
+
+def _term_width(default: int = 80) -> int:
+    try:
+        import shutil
+        return max(40, shutil.get_terminal_size().columns)
+    except Exception:
+        return default
+
+def _rule(char: str = "─", color: Optional[str] = None) -> str:
+    col = color or _get("GRAY", "")
+    return c(char * _term_width(), col)
+
+def _kv(label: str, value: Any, width: int = 24, vcolor: Optional[str] = None) -> str:
+    txt = f"  {label:<{width}} "
+    val = "N/A" if value is None else str(value)
+    return c(txt, _get("GRAY", "")) + (c(val, vcolor, _get("BOLD", "")) if vcolor else val)
+
+def _print_table(headers: Sequence[str], rows: Sequence[Sequence[Any]]) -> None:
+    if not rows:
+        print(c("  (sem dados)", _get("GRAY", ""), _get("BOLD", "")))
+        return
+    widths = [len(h) for h in headers]
+    for r in rows:
+        for i, col in enumerate(r):
+            widths[i] = max(widths[i], len(str(col)))
+    header_line = (
+        "  "
+        + "  ".join(
+            c(f"{h:<{widths[i]}}", _get("BOLD", ""), _get("CYAN", ""))
+            for i, h in enumerate(headers)
+        )
+    )
+    sep = "  " + c(" ".join("─" * w for w in widths), _get("GRAY", ""))
+    print(header_line)
+    print(sep)
+    for r in rows:
+        print(
+            "  "
+            + "  ".join(
+                c(f"{str(col):<{widths[i]}}", _get("WHITE", ""))
+                for i, col in enumerate(r)
+            )
+        )
+
+def _highlight_box(lines: List[str], color: str = "", border: str = "┃") -> None:
+    # Modern visual section, with color border and padding
+    width = max(len(line) for line in lines) + 4
+    top = c("╭" + "─" * (width - 2) + "╮", color)
+    bottom = c("╰" + "─" * (width - 2) + "╯", color)
+    print(top)
+    for l in lines:
+        print(f"{c(border,color)} {l.ljust(width-4)} {c(border,color)}")
+    print(bottom)
+
+# ======================================================
+# Impressão de resultados com UI aprimorada
+# ======================================================
+def _print_ip_dossier(info: IPAddressInfo) -> None:
+    try:
+        print()
+        _highlight_box([
+            f"{_emoji('target')}  Dossiê do IP: {c(info.ip, _get('BOLD',''))}"
+        ], color=_get("CYAN", ""))
+        print(_rule(color=_get("CYAN", "")))
+
+        print(c(f"{_emoji('net')}  Dados de Rede e DNS", _get("BLUE", ""), _get("BOLD", "")))
+        print(_kv("ISP/Organização:", getattr(info, "isp", None)))
+        asn_num = getattr(info, "asn_number", None)
+        asn_name = getattr(info, "asn_name", None)
+        asn = f"AS{asn_num}" if asn_num else "N/A"
+        print(_kv("ASN:", f"{asn} ({asn_name or 'N/A'})"))
+        print(_kv("DNS Reverso (PTR):", getattr(info, "ptr", None) or "Nenhum"))
+
+        print(c(f"\n{_emoji('info')}  Geolocalização", _get("BLUE", ""), _get("BOLD", "")))
+        print(_kv("Cidade:", getattr(info, "city", None)))
+        print(_kv("Região/Estado:", getattr(info, "region", None)))
+        print(_kv("País:", getattr(info, "country_code", None)))
+
+        rep = getattr(info, "raw_data", {}) or {}
+        rep = rep.get("reputation", {}) if isinstance(rep, dict) else {}
+        if rep:
+            print(c(f"\n{_emoji('shield')}  Reputação (AbuseIPDB)", _get("BLUE", ""), _get("BOLD", "")))
+            if "error" in rep:
+                print(c(f"  {_emoji('warn')}  Erro: {rep['error']}", _get("YELLOW", "")))
+            else:
+                try:
+                    score = int(rep.get("abuseConfidenceScore", 0) or 0)
+                except Exception:
+                    score = 0
+                col = _get("GREEN", "") if score < 25 else (_get("YELLOW", "") if score < 75 else _get("RED", ""))
+                print(_kv("Pontuação de Abuso:", f"{score}/100", vcolor=col))
+                print(_kv("Total de Denúncias:", rep.get("totalReports", 0)))
+                print(_kv("Domínio:", rep.get("domain", "N/A")))
+
+        ports = getattr(info, "ports", None)
+        if ports:
+            print(c(f"\n{_emoji('scan')}  Portas e Serviços (Nmap)", _get("BLUE", ""), _get("BOLD", "")))
+            headers = ["PORTA", "PROTO", "ESTADO", "SERVIÇO", "VERSÃO"]
+            rows: List[List[str]] = []
+            for p in sorted(ports, key=lambda x: x.port_id):
+                version = f"{getattr(p, 'product', '') or ''} {getattr(p, 'version', '') or ''}".strip()
+                rows.append([
+                    str(p.port_id),
+                    getattr(p, "protocol", "?"),
+                    getattr(p, "state", "?"),
+                    getattr(p, "service_name", None) or "-",
+                    version or "-",
+                ])
+            _print_table(headers, rows)
+        print()
+    except Exception as e:
+        print(c(f"{_emoji('err')}  Erro ao exibir dossiê do IP: {e}", _get("RED", ""), _get("BOLD", "")))
+
+def _print_domain_dossier(info: DomainInfo) -> None:
+    try:
+        print()
+        _highlight_box([
+            f"{_emoji('search')}  Dossiê do Domínio: {c(info.domain_name, _get('BOLD',''))}"
+        ], color=_get("CYAN", ""))
+        print(_rule(color=_get("CYAN", "")))
+
+        print(c(f"{_emoji('net')}  Registros DNS", _get("BLUE", ""), _get("BOLD", "")))
+        print(_kv("A (IPv4):", ", ".join(info.a_records) if getattr(info, "a_records", None) else "Nenhum"))
+        print(_kv("NS (Nameservers):", ", ".join(info.ns_records) if getattr(info, "ns_records", None) else "Nenhum"))
+
+        print(c(f"\n{_emoji('mail')}  Análise de E-mail", _get("BLUE", ""), _get("BOLD", "")))
+        mx = getattr(info, "mx_records", []) or []
+        print(_kv("MX:", ", ".join(r.get("raw", "") for r in mx) if mx else "Nenhum"))
+        spf = getattr(info, "spf", {}) or {}
+        dmarc = getattr(info, "dmarc", {}) or {}
+        print(_kv("SPF:", spf.get("raw", "Não encontrado")))
+        print(_kv("DMARC:", dmarc.get("raw", "Não encontrado")))
+        axfr_open = bool(getattr(info, "is_axfr_open", False))
+        axfr = "ABERTA (VULNERÁVEL!)" if axfr_open else "Fechada"
+        axfr_col = _get("RED", "") if axfr_open else _get("GREEN", "")
+        print(_kv("AXFR:", c(axfr, axfr_col, _get("BOLD", ""))))
+        print()
+    except Exception as e:
+        print(c(f"{_emoji('err')}  Erro ao exibir dossiê do domínio: {e}", _get("RED", ""), _get("BOLD", "")))
+
+def _print_findings_list(findings: List[Finding]) -> None:
+    try:
+        print()
+        magenta = _get("MAGENTA", _get("BLUE", ""))
+        _highlight_box([
+            f"{_emoji('file')}  Achados"
+        ], color=magenta)
+        print(_rule(color=magenta))
+        if not findings:
+            print(c("  (sem achados)", _get("GRAY", ""), _get("BOLD", "")))
+            return
+        for f in findings:
+            level = (f.severity or "").lower()
+            if level == "critical":
+                badge = c(f"[{level.upper()}]", _get("RED", ""), _get("BOLD", "")) + " " + _emoji("err")
+            elif level in ("high", "medium"):
+                badge = c(f"[{level.upper()}]", _get("YELLOW", ""), _get("BOLD", "")) + " " + _emoji("warn")
+            else:
+                badge = c(f"[{level.upper()}]", _get("GREEN", ""), _get("BOLD", "")) + " " + _emoji("ok")
+            print(f"\n  {badge} {getattr(f, 'description', '')}")
+            print(_kv("Alvo:", getattr(f, "target", None)))
+            print(_kv("Módulo/Tipo:", f"{getattr(f, 'module', '')} / {getattr(f, 'finding_type', '')}"))
+            for k, v in (getattr(f, "details", {}) or {}).items():
+                print(_kv(k.replace('_', ' ').capitalize() + ":", v))
+        print()
+    except Exception as e:
+        print(c(f"{_emoji('err')}  Erro ao exibir achados: {e}", _get("RED", ""), _get("BOLD", "")))
+
+def _print_results(results: Any) -> None:
+    try:
+        if not results:
+            print(c(f"{_emoji('warn')}  Nenhum resultado retornado pelo módulo.", _get("YELLOW", ""), _get("BOLD", "")))
+            return
+        if isinstance(results, IPAddressInfo):
+            _print_ip_dossier(results)
+        elif isinstance(results, DomainInfo):
+            _print_domain_dossier(results)
+        elif isinstance(results, list) and results and isinstance(results[0], Finding):
+            _print_findings_list(results)
+        else:
+            print(c(f"{_emoji('info')}  Resultado genérico", _get("CYAN", ""), _get("BOLD", "")))
+            from pprint import pprint
+            pprint(results)
+    except Exception as e:
+        print(c(f"{_emoji('err')}  Erro ao exibir resultados: {e}", _get("RED", ""), _get("BOLD", "")))
+
+# ======================================================
+# Menu interativo (UI Moderna)
+# ======================================================
+def interactive_menu() -> None:
+    try:
+        ui.clear_screen()
+        ui.print_banner()
+
+        print(_rule(color=_get("CYAN", "")))
+        print(
+            c(f"{_emoji('bat')}  BATMAN DO CERRADO", _get("BOLD", ""), _get("CYAN", ""))
+            + "   "
+            + c("Segurança & OSINT Suite", _get("GRAY", ""))
+        )
+        print(
+            c("          author: Juan Carlos", _get("BOLD", ""), _get("YELLOW", ""))
+        )
+        print(_rule(color=_get("CYAN", "")))
+
+        print(
+            c(
+                f"{_emoji('info')}  Selecione um módulo para iniciar a análise:",
+                _get("BOLD", ""),
+                _get("WHITE", ""),
+            )
+        )
+
+        menu_items: Dict[str, Dict[str, Any]] = {
+            "1": {"name": "ip_analyzer",     "desc": "Dossiê completo para um endereço IP.",              "icon": "target", "sudo": False},
+            "2": {"name": "domain_analyzer", "desc": "Análise OSINT completa para um domínio.",            "icon": "search", "sudo": False},
+            "3": {"name": "nmap_scanner",    "desc": "Varredura Nmap com perfis customizáveis.",           "icon": "scan",   "sudo": False},
+            "4": {"name": "fs_monitor",      "desc": "Integridade de arquivos em tempo real. (sudo)",      "icon": "file",   "sudo": True},
+            "5": {"name": "net_monitor",     "desc": "Monitoramento de rede em tempo real. (sudo)",        "icon": "net",    "sudo": True},
+            "9": {"name": "ai_auditor",      "desc": "Protocolo Oráculo (em breve).",                      "icon": "spark",  "sudo": False, "wip": True},
+        }
+
+        def menu_section(title, keys, color):
+            print()
+            print(c(f"  {title}", color, _get("BOLD", "")))
+            for key in keys:
+                item = menu_items[key]
+                tag = c(" (em breve)", _get("GRAY", ""), _get("BOLD", "")) if item.get("wip") else ""
+                sudo = c(" (Requer sudo)", _get("YELLOW", ""), _get("BOLD", "")) if item.get("sudo") else ""
+                icon = _emoji(item["icon"])
+                print(
+                    f"   {c(key, _get('GREEN',''), _get('BOLD',''))}) "
+                    f"{icon} {c(item['name'], _get('BOLD',''), color)}  "
+                    f"{c('— ' + item['desc'], _get('GRAY',''))}{sudo}{tag}"
+                )
+
+        menu_section("[ ANÁLISE E OSINT ]", ("1", "2", "3"), _get("CYAN", ""))
+        menu_section("[ DEFESA E MONITORAMENTO ]", ("4", "5"), _get("MAGENTA", ""))
+        menu_section("[ INTELIGÊNCIA ARTIFICIAL ]", ("9",), _get("YELLOW", ""))
+
+        print(_rule(color=_get("GRAY", "")))
+        choice = input(
+            c(
+                f"{_emoji('arrow')}  Escolha uma opção (ou 'q' para sair): ",
+                _get("CYAN", ""),
+                _get("BOLD", ""),
+            )
+        ).strip()
+        if choice.lower() in ("q", "quit", "sair"):
+            print()
+            sys.exit(0)
+
+        selected = menu_items.get(choice) or next(
+            (it for it in menu_items.values() if it["name"] == choice), None
+        )
         if not selected:
-            print(ui.color("Opção inválida.", ui.RED)); time.sleep(1); interactive_menu()
+            print(
+                c(f"{_emoji('err')}  Opção inválida.", _get("RED", ""), _get("BOLD", ""))
+            )
+            time.sleep(1)
+            interactive_menu()
             return
 
-        module_name = selected['name']
+        module_name = selected["name"]
         kwargs: Dict[str, Any] = {}
-        # _ALTERADO_: Verificação do nome corrigido.
-        # Apenas módulos que exigem um alvo solicitam entrada do usuário. Use o nome canônico 'domain_analyzer'.
-        if module_name in ["ip_analyzer", "domain_analyzer", "nmap_scanner"]:
-            kwargs["target"] = input(ui.color(f"  -> Alvo para '{module_name}': ", ui.GREEN)).strip()
+
+        if module_name in ("ip_analyzer", "domain_analyzer", "nmap_scanner"):
+            prompt = f"{_emoji('target')}  Alvo para '{module_name}'"
+            kwargs["target"] = input(
+                c(f"  {prompt}: ", _get("GREEN", ""), _get("BOLD", ""))
+            ).strip()
             if not kwargs["target"]:
-                print(ui.color("Alvo é obrigatório.", ui.RED))
+                print(
+                    c(
+                        f"{_emoji('err')}  Alvo é obrigatório.",
+                        _get("RED", ""),
+                        _get("BOLD", ""),
+                    )
+                )
                 time.sleep(1)
                 interactive_menu()
                 return
 
-        # _ALTERADO_: Lógica de menu inteligente para o Nmap Scanner.
         if module_name == "nmap_scanner":
-            profiles = config.get_section('nmap_scanner.profiles')
+            profiles = config.get_section("nmap_scanner.profiles")
             if not profiles:
-                print(ui.color("Nenhum perfil Nmap encontrado no settings.toml.", ui.RED))
+                print(
+                    c(
+                        f"{_emoji('err')}  Nenhum perfil Nmap encontrado no settings.toml.",
+                        _get("RED", ""),
+                        _get("BOLD", ""),
+                    )
+                )
                 time.sleep(1)
                 interactive_menu()
                 return
-            
-            print(ui.color("\nPerfis de varredura disponíveis:", ui.BLUE))
-            profile_keys = list(profiles.keys())
-            for i, name in enumerate(profile_keys, 1):
-                print(f"  {i}) {ui.BOLD}{name}{ui.RESET}")
-            
-            profile_choice = input(ui.color(f"  -> Escolha um perfil [1-{len(profiles)}]: ", ui.GREEN)).strip()
+            keys = list(profiles.keys())
+            print(
+                c(
+                    f"\n{_emoji('scan')}  Perfis de varredura disponíveis:",
+                    _get("BLUE", ""),
+                )
+            )
+            for i, name in enumerate(keys, 1):
+                print(
+                    f"   {c(str(i)+')', _get('GREEN',''), _get('BOLD',''))} {c(name, _get('BOLD',''))} {c('('+profiles[name]+')', _get('GRAY',''))}"
+                )
+            choice_idx = input(
+                c(
+                    f"  {_emoji('gear')}  Escolha um perfil [1-{len(keys)}]: ",
+                    _get("GREEN", ""),
+                )
+            ).strip()
             try:
-                # Converte a escolha numérica para o nome do perfil. Use a chave 'profile_name'
-                kwargs["profile_name"] = profile_keys[int(profile_choice) - 1]
-            except (ValueError, IndexError):
-                print(ui.color("Seleção inválida.", ui.RED))
+                kwargs["profile_name"] = keys[int(choice_idx) - 1]
+            except Exception:
+                print(
+                    c(
+                        f"{_emoji('err')}  Seleção inválida.",
+                        _get("RED", ""),
+                        _get("BOLD", ""),
+                    )
+                )
                 time.sleep(1)
                 interactive_menu()
                 return
-        
-        results = run_module(module_name, **kwargs)
-        
-        if results:
-            _print_results(results)
+
+        try:
+            results = run_module(module_name, **kwargs)
+        except Exception as e:
+            print(
+                c(
+                    f"{_emoji('err')}  Erro ao executar módulo '{module_name}': {e}",
+                    _get("RED", ""),
+                    _get("BOLD", ""),
+                )
+            )
+            results = None
+
+        _print_results(results)
 
     except (KeyboardInterrupt, EOFError):
-        print(ui.color("\n\nOperação cancelada. Saindo.", ui.YELLOW))
+        print(c("\nOperação cancelada.", _get("YELLOW", ""), _get("BOLD", "")))
         sys.exit(0)
-        
+    except Exception as e:
+        print(
+            c(
+                f"{_emoji('err')}  Erro inesperado: {e}",
+                _get("RED", ""),
+                _get("BOLD", ""),
+            )
+        )
+        sys.exit(1)
+
     ui.pause()
     interactive_menu()
 
-# --- Lógica Principal do CLI ---
-
-def main():
-    """Ponto de entrada principal do framework."""
-    is_root = os.geteuid() == 0 if hasattr(os, 'geteuid') else False
+# ======================================================
+# Entry point (subcomandos)
+# ======================================================
+def main() -> None:
+    is_root = hasattr(os, "geteuid") and os.geteuid() == 0
     parser = argparse.ArgumentParser(
-        description="Batman do Cerrado - Suíte de Segurança Pessoal",
-        formatter_class=argparse.RawTextHelpFormatter
+        description="Batman do Cerrado — Suíte de Segurança Pessoal",
+        formatter_class=argparse.RawTextHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="module", help="Módulo a ser executado")
 
@@ -193,29 +444,26 @@ def main():
 
     subparsers.required = True
 
-    p_ip = subparsers.add_parser("ip_analyzer", help="Executa o dossiê completo para um IP.", aliases=["ip"])
-    p_ip.add_argument("target", help="O endereço IP a ser analisado.")
-    
-    p_domain = subparsers.add_parser("domain", help="Executa a análise OSINT para um domínio.", aliases=["domain-analyzer"])
-    p_domain.add_argument("target", help="O domínio a ser analisado.")
-    
-    # _ALTERADO_: Nome do sub-comando e alias corrigidos
-    p_nmap = subparsers.add_parser("nmap_scanner", help="Executa uma varredura Nmap.", aliases=["nmap"])
-    p_nmap.add_argument("target", help="O alvo para a varredura.")
-    p_nmap.add_argument("-p", "--profile", required=True, help="O perfil de scan (definido em settings.toml).")
-    
-    p_fs = subparsers.add_parser("fs", help="Inicia o monitor de integridade de arquivos.", aliases=["fs-monitor"])
+    p_ip = subparsers.add_parser("ip_analyzer", help="Dossiê completo para um IP.", aliases=["ip"])
+    p_ip.add_argument("target", help="Endereço IP a ser analisado.")
+
+    p_domain = subparsers.add_parser("domain", help="Análise OSINT para um domínio.", aliases=["domain-analyzer"])
+    p_domain.add_argument("target", help="Domínio a ser analisado.")
+
+    p_nmap = subparsers.add_parser("nmap_scanner", help="Varredura Nmap.", aliases=["nmap"])
+    p_nmap.add_argument("target", help="Alvo da varredura.")
+    p_nmap.add_argument("-p", "--profile", required=True, help="Perfil de scan (definido em settings.toml).")
+
+    p_fs = subparsers.add_parser("fs", help="Monitor de integridade de arquivos.", aliases=["fs-monitor"])
     if not is_root:
-        p_fs.epilog = ui.color("AVISO: Recomenda-se executar este módulo como root.", ui.YELLOW)
-    
-    p_net = subparsers.add_parser("net", help="Inicia o monitor de rede.", aliases=["net-monitor"])
+        p_fs.epilog = c("Sugestão: execute como root para mais sinal.", _get("YELLOW", ""))
+
+    p_net = subparsers.add_parser("net", help="Monitor de rede.", aliases=["net-monitor"])
     if not is_root:
-        p_net.epilog = ui.color("AVISO: Recomenda-se executar este módulo como root.", ui.YELLOW)
-    
+        p_net.epilog = c("Sugestão: execute como root para mais sinal.", _get("YELLOW", ""))
+
     args = parser.parse_args()
-    
-    module_to_run = args.module
-    # _ALTERADO_: Normaliza aliases para os nomes canônicos dos módulos.
+
     alias_map = {
         "nmap": "nmap_scanner",
         "ip": "ip_analyzer",
@@ -226,19 +474,26 @@ def main():
         "net": "net_monitor",
         "net-monitor": "net_monitor",
     }
-    module_to_run = alias_map.get(module_to_run, module_to_run)
+    module = alias_map.get(args.module, args.module)
 
-    # Remove a chave "module" dos argumentos antes de repassar para o módulo de análise.
     params: Dict[str, Any] = vars(args).copy()
     params.pop("module", None)
-    # Ajusta o nome do parâmetro de perfil para o Nmap Scanner. A função analyze usa 'profile_name'.
-    if module_to_run == "nmap_scanner" and "profile" in params:
+    if module == "nmap_scanner" and "profile" in params:
         params["profile_name"] = params.pop("profile")
-    results = run_module(module_to_run, **params)
-    
-    if results:
-        _print_results(results)
+
+    try:
+        results = run_module(module, **params)
+    except Exception as e:
+        print(
+            c(
+                f"{_emoji('err')}  Erro ao executar módulo '{module}': {e}",
+                _get("RED", ""),
+                _get("BOLD", ""),
+            )
+        )
+        results = None
+
+    _print_results(results)
 
 if __name__ == "__main__":
     main()
-

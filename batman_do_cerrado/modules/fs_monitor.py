@@ -1,11 +1,7 @@
-# batman-do-cerrado-pro/batman_do_cerrado/modules/fs_monitor.py
-
 """
-Módulo FS Monitor (Refatorado) - Batman do Cerrado
+FS Monitor Híbrido - Batman do Cerrado
 
-Vigia a integridade de arquivos e diretórios, agora totalmente integrado
-ao framework, utilizando a configuração central e retornando "Findings"
-padronizados.
+Combina monitoramento event-driven e baseline para máxima robustez e praticidade.
 """
 
 import hashlib
@@ -14,20 +10,25 @@ import os
 import stat
 import sys
 import time
+import threading
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, Optional, List, Generator, Any
+from typing import Dict, Optional, List, Set
 
-# Importações do nosso framework
+try:
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler, FileSystemEvent
+except ImportError:
+    print("O módulo 'watchdog' é necessário. Instale com: pip install watchdog")
+    sys.exit(1)
+
 from batman_do_cerrado.core import ui, utils
 from batman_do_cerrado.core.config import PROJECT_ROOT as CORE_PROJECT_ROOT
 from batman_do_cerrado.core.config import config
 from batman_do_cerrado.core.models import Finding
 
-# --- Modelo de Dados Interno do Módulo ---
 @dataclass
 class FileState:
-    """Representa o estado de um arquivo em um ponto no tempo."""
     path: str
     size: int
     mtime: float
@@ -38,40 +39,32 @@ class FileState:
 
     @property
     def is_suid_root(self) -> bool:
-        """Verifica se a permissão SUID está ativa e o dono é root."""
         return bool(self.mode & stat.S_ISUID and self.uid == 0)
 
-# --- Lógica do Monitor ---
-
 class FileSystemMonitor:
-    """Encapsula a lógica de monitoramento de integridade de arquivos."""
-
     def __init__(self):
-        # Carrega as configurações do arquivo settings.toml
         self.paths_to_watch = config.get('fs_monitor', 'default_paths', [])
         self.suid_allowlist = set(config.get('fs_monitor', 'suid_allowlist', []))
         self.exclude_globs = config.get('fs_monitor', 'default_excludes', [])
-        
-        # Define os caminhos de dados e logs usando a raiz do projeto. 'utils' não possui
-        # PROJECT_ROOT, portanto usamos o valor da configuração central.
         self.baseline_path = CORE_PROJECT_ROOT / "data" / "baselines" / "fs_baseline.json"
-        
         self.baseline: Dict[str, FileState] = self._load_baseline()
-        self.hash_max_bytes = 5 * 1024 * 1024 # Limite para hashing (pode ir pra config)
+        self.hash_max_bytes = 5 * 1024 * 1024
+        self.event_history: Dict[str, float] = {}  # path -> last event timestamp
+
+        # Debounce: não alerta mais de uma vez por X segundos para o mesmo arquivo/evento
+        self.debounce_seconds = config.get('fs_monitor', 'debounce_seconds', 10)
 
     def _hash_file(self, path: Path) -> Optional[str]:
-        """Calcula o hash SHA256 de um arquivo, com tratamento de erros."""
         h = hashlib.sha256()
         try:
             with path.open("rb") as f:
-                while chunk := f.read(1024 * 1024): # Le em chunks de 1MB
+                while chunk := f.read(1024 * 1024):
                     h.update(chunk)
             return h.hexdigest()
         except (IOError, PermissionError):
             return None
 
     def _get_current_state(self, path: Path) -> Optional[FileState]:
-        """Obtém o estado atual de um arquivo no disco."""
         try:
             st = path.lstat()
             should_hash = st.st_size <= self.hash_max_bytes
@@ -87,110 +80,126 @@ class FileSystemMonitor:
         except (FileNotFoundError, PermissionError):
             return None
 
+    def _save_baseline(self):
+        raw_data = {path: asdict(state) for path, state in self.baseline.items()}
+        self.baseline_path.parent.mkdir(parents=True, exist_ok=True)
+        self.baseline_path.write_text(json.dumps(raw_data, indent=2), encoding="utf-8")
+
     def _load_baseline(self) -> Dict[str, FileState]:
-        """Carrega a baseline do arquivo JSON."""
         self.baseline_path.parent.mkdir(parents=True, exist_ok=True)
         if not self.baseline_path.is_file():
             return {}
         try:
             raw_data = json.loads(self.baseline_path.read_text(encoding="utf-8"))
             return {path: FileState(**data) for path, data in raw_data.items()}
-        except (json.JSONDecodeError, TypeError):
-            print(ui.color("AVISO: Baseline corrompida. Uma nova será criada.", ui.YELLOW))
+        except Exception:
+            print(ui.color("AVISO: Baseline corrompida. Nova será criada!", ui.YELLOW))
             return {}
 
-    def _save_baseline(self):
-        """Salva o estado atual da baseline em disco."""
-        raw_data = {path: asdict(state) for path, state in self.baseline.items()}
-        self.baseline_path.write_text(json.dumps(raw_data, indent=2), encoding="utf-8")
+    def _should_alert(self, path: str, event_type: str) -> bool:
+        key = f"{path}|{event_type}"
+        now = time.time()
+        last_event = self.event_history.get(key, 0)
+        if now - last_event < self.debounce_seconds:
+            return False
+        self.event_history[key] = now
+        return True
 
-    def check_changes(self) -> Generator[Finding, None, None]:
-        """
-        Executa um ciclo de verificação e gera 'Findings' para cada mudança detectada.
-        Esta é a implementação da lógica de "deltas".
-        """
+    def scan_integrity(self) -> List[Finding]:
+        # Scanner periódico: varredura completa (baseline)
+        findings: List[Finding] = []
         current_paths_on_disk = set()
-        
-        # Itera sobre os arquivos no disco
         for watch_path_str in self.paths_to_watch:
             watch_path = Path(watch_path_str).expanduser()
             for root, _, files in os.walk(watch_path):
                 for name in files:
                     path = Path(root) / name
+                    if any(path.match(pattern) for pattern in self.exclude_globs):
+                        continue
                     current_paths_on_disk.add(str(path))
-                    
                     old_state = self.baseline.get(str(path))
                     new_state = self._get_current_state(path)
-
                     if not new_state: continue
 
                     if not old_state:
-                        # --- ARQUIVO NOVO ---
                         self.baseline[str(path)] = new_state
-                        yield Finding(
-                            target=str(path), module="fs_monitor", finding_type="file_created",
-                            description=f"Novo arquivo detectado.", severity="medium",
-                            details={"size": new_state.size, "mode": oct(new_state.mode)}
-                        )
+                        findings.append(Finding(target=str(path), module="fs_monitor", finding_type="file_created", description="Novo arquivo detectado.", severity="medium", details={"size": new_state.size, "mode": oct(new_state.mode)}))
                         if new_state.is_suid_root and str(path) not in self.suid_allowlist:
-                            yield Finding(
-                                target=str(path), module="fs_monitor", finding_type="setuid_added",
-                                description="Novo arquivo com permissão SUID perigosa.", severity="critical",
-                                details={"mode": oct(new_state.mode)}
-                            )
+                            findings.append(Finding(target=str(path), module="fs_monitor", finding_type="setuid_added", description="Arquivo SUID/root perigoso.", severity="critical", details={"mode": oct(new_state.mode)}))
                         continue
 
-                    # --- ARQUIVO EXISTENTE: COMPARAR ---
                     if new_state.mode != old_state.mode:
-                        yield Finding(
-                            target=str(path), module="fs_monitor", finding_type="perms_changed",
-                            description="Permissões do arquivo foram alteradas.", severity="high",
-                            details={"old": oct(old_state.mode), "new": oct(new_state.mode)}
-                        )
-
+                        findings.append(Finding(target=str(path), module="fs_monitor", finding_type="perms_changed", description="Permissões do arquivo alteradas.", severity="high", details={"old": oct(old_state.mode), "new": oct(new_state.mode)}))
                     if not old_state.is_suid_root and new_state.is_suid_root and str(path) not in self.suid_allowlist:
-                        yield Finding(
-                            target=str(path), module="fs_monitor", finding_type="setuid_added",
-                            description="Permissão SUID perigosa foi adicionada a um arquivo existente.", severity="critical",
-                            details{"mode": oct(new_state.mode)}
-                        )
-                    
-                    # Para arquivos grandes, o hash só é calculado se o tamanho ou mtime mudar.
+                        findings.append(Finding(target=str(path), module="fs_monitor", finding_type="setuid_added", description="Permissão SUID perigosa adicionada.", severity="critical", details={"mode": oct(new_state.mode)}))
                     old_hash = old_state.sha256
                     new_hash = new_state.sha256
                     if not old_hash or (new_state.size != old_state.size or int(new_state.mtime) != int(old_state.mtime)):
-                        if not new_hash: # Se o arquivo for grande, calcula o hash agora
+                        if not new_hash:
                             new_hash = self._hash_file(path)
-                    
                     if old_hash != new_hash:
-                        yield Finding(
-                            target=str(path), module="fs_monitor", finding_type="file_modified",
-                            description="Conteúdo do arquivo foi modificado (hash diferente).", severity="critical",
-                            details={"old_hash": old_hash, "new_hash": new_hash}
-                        )
-
-                    # Atualiza a baseline com o estado mais recente
+                        findings.append(Finding(target=str(path), module="fs_monitor", finding_type="file_modified", description="Conteúdo do arquivo modificado (hash diferente).", severity="critical", details={"old_hash": old_hash, "new_hash": new_hash}))
                     self.baseline[str(path)] = new_state
-
-        # --- ARQUIVOS DELETADOS ---
         deleted_paths = set(self.baseline.keys()) - current_paths_on_disk
         for path_str in deleted_paths:
             del self.baseline[path_str]
-            yield Finding(
-                target=path_str, module="fs_monitor", finding_type="file_deleted",
-                description="Arquivo que estava na baseline foi deletado.", severity="high",
-                details={}
-            )
-        
+            findings.append(Finding(target=path_str, module="fs_monitor", finding_type="file_deleted", description="Arquivo deletado.", severity="high", details={}))
         self._save_baseline()
+        return findings
 
+    def handle_event(self, event: FileSystemEvent):
+        path = Path(event.src_path)
+        if any(path.match(pattern) for pattern in self.exclude_globs):
+            return  # Excluído via glob
+        # Só alerta se for relevante e não for flood
+        if not self._should_alert(str(path), event.event_type):
+            return
+        # Consulta estado atual e compara com baseline
+        old_state = self.baseline.get(str(path))
+        new_state = self._get_current_state(path)
+        findings = []
+        if event.event_type == "created":
+            self.baseline[str(path)] = new_state
+            findings.append(Finding(target=str(path), module="fs_monitor", finding_type="file_created", description="Arquivo criado (evento ao vivo).", severity="medium", details={"size": new_state.size, "mode": oct(new_state.mode)}))
+            if new_state.is_suid_root and str(path) not in self.suid_allowlist:
+                findings.append(Finding(target=str(path), module="fs_monitor", finding_type="setuid_added", description="Arquivo SUID/root perigoso.", severity="critical", details={"mode": oct(new_state.mode)}))
+        elif event.event_type == "deleted":
+            if str(path) in self.baseline:
+                del self.baseline[str(path)]
+                findings.append(Finding(target=str(path), module="fs_monitor", finding_type="file_deleted", description="Arquivo deletado (evento ao vivo).", severity="high", details={}))
+        elif event.event_type == "modified":
+            if old_state and new_state:
+                if new_state.mode != old_state.mode:
+                    findings.append(Finding(target=str(path), module="fs_monitor", finding_type="perms_changed", description="Permissões alteradas (ao vivo).", severity="high", details={"old": oct(old_state.mode), "new": oct(new_state.mode)}))
+                if not old_state.is_suid_root and new_state.is_suid_root and str(path) not in self.suid_allowlist:
+                    findings.append(Finding(target=str(path), module="fs_monitor", finding_type="setuid_added", description="Permissão SUID adicionada.", severity="critical", details={"mode": oct(new_state.mode)}))
+                old_hash = old_state.sha256
+                new_hash = new_state.sha256
+                if not old_hash or (new_state.size != old_state.size or int(new_state.mtime) != int(old_state.mtime)):
+                    if not new_hash:
+                        new_hash = self._hash_file(path)
+                if old_hash != new_hash:
+                    findings.append(Finding(target=str(path), module="fs_monitor", finding_type="file_modified", description="Conteúdo do arquivo modificado (hash diferente).", severity="critical", details={"old_hash": old_hash, "new_hash": new_hash}))
+                self.baseline[str(path)] = new_state
+        if findings:
+            _print_findings(findings)
+            self._save_baseline()
+
+class HybridFsEventHandler(FileSystemEventHandler):
+    def __init__(self, monitor: FileSystemMonitor):
+        super().__init__()
+        self.monitor = monitor
+
+    def on_created(self, event): self.monitor.handle_event(event)
+    def on_deleted(self, event): self.monitor.handle_event(event)
+    def on_modified(self, event): self.monitor.handle_event(event)
+    def on_moved(self, event):  # Moved = deleted + created
+        self.monitor.handle_event(event)
 
 def _print_findings(findings: List[Finding]):
-    """Imprime uma lista de achados de forma organizada."""
     if not findings:
         print(ui.color(f"[{time.strftime('%H:%M:%S')}] Nenhuma mudança detectada.", ui.GRAY))
         return
-
     for finding in findings:
         color = ui.RED if finding.severity == "critical" else ui.YELLOW
         print(ui.color(f"\n[ALERTA] {finding.description}", ui.BOLD + color))
@@ -199,34 +208,44 @@ def _print_findings(findings: List[Finding]):
         for key, value in finding.details.items():
             print(f"  - {key.replace('_', ' ').capitalize()}: {value}")
 
-
-def main():
-    """Ponto de entrada para o monitor em modo de loop contínuo."""
+def start_hybrid_monitor():
     ui.print_banner()
-    print(ui.color("Módulo de Monitor de Integridade de Arquivos (Refatorado)", ui.CYAN))
-    
+    print(ui.color("Monitor Híbrido de FS - Integridade + Eventos Ao Vivo", ui.CYAN))
     monitor = FileSystemMonitor()
-    
-    # Se a baseline estiver vazia, constrói a primeira versão
+
     if not monitor.baseline:
         print(ui.color("Baseline não encontrada. Construindo baseline inicial...", ui.YELLOW))
-        # A primeira execução popula a baseline e gera "achados" informativos
-        initial_findings = list(monitor.check_changes())
+        initial_findings = monitor.scan_integrity()
         print(ui.color(f"Baseline criada com {len(monitor.baseline)} arquivos.", ui.GREEN))
         _print_findings(initial_findings)
 
-    print(ui.color("\nIniciando monitoramento em tempo real... (Pressione Ctrl+C para sair)", ui.GREEN))
+    print(ui.color("\nMonitoramento ao vivo iniciado... [Ctrl+C para sair]", ui.GREEN))
+
+    observer = Observer()
+    event_handler = HybridFsEventHandler(monitor)
+    for path in monitor.paths_to_watch:
+        observer.schedule(event_handler, path, recursive=True)
+    observer.start()
+
+    def periodic_scan():
+        while True:
+            time.sleep(60)  # Scanner a cada 60s (ajustável)
+            findings = monitor.scan_integrity()
+            _print_findings(findings)
+
+    scanner_thread = threading.Thread(target=periodic_scan, daemon=True)
+    scanner_thread.start()
+
     try:
         while True:
-            findings = list(monitor.check_changes())
-            _print_findings(findings)
-            time.sleep(5) # Intervalo de verificação
+            time.sleep(1)
     except KeyboardInterrupt:
         print(ui.color("\nMonitoramento encerrado pelo usuário.", ui.YELLOW))
+        observer.stop()
+        observer.join()
         sys.exit(0)
 
 if __name__ == "__main__":
     if os.geteuid() != 0:
         print(ui.color("Aviso: Para melhores resultados, execute este monitor como root.", ui.YELLOW))
-    main()
-
+    start_hybrid_monitor()

@@ -1,2 +1,57 @@
+# Python
 __pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyd
+*.pyc
+*.pyo
+*.env
+.venv/
+venv/
+ENV/
+env/
 *.egg-info/
+.eggs/
+dist/
+build/
+
+# VSCode/PyCharm e outros editores
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Arquivos temporários
+*.log
+*.tmp
+*.bak
+*.orig
+
+# Dados do projeto (gerados em tempo de execução)
+data/
+logs/
+# Baselines monitoradas pelo FS Monitor
+batman_do_cerrado/data/
+batman_do_cerrado/logs/
+
+# Configurações locais
+.settings/
+*.local
+*.secret
+.env
+
+# Docker (se usar volumes temporários)
+docker-compose.override.yml
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Arquivos de testes
+.coverage
+.cache/
+pytest_cache/
+
+# Arquivos de containerização, se não quiser versionar imagens locais
+*.tar
