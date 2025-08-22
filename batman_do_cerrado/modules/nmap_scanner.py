@@ -1,3 +1,5 @@
+# batman_do_cerrado/modules/nmap_scanner.py
+
 """
 Módulo Nmap Scanner (Híbrido, Robusto e Moderno) - Batman do Cerrado
 
@@ -39,7 +41,6 @@ def _parse_xml_to_models(xml_string: str) -> List[IPAddressInfo]:
 
         host_info = IPAddressInfo(ip=ip_address, version=ip_version)
         
-        # PTR/hostnames
         hostnames_node = host_node.find("hostnames")
         if hostnames_node is not None:
             for hn in hostnames_node.findall("hostname"):
@@ -47,7 +48,6 @@ def _parse_xml_to_models(xml_string: str) -> List[IPAddressInfo]:
                     host_info.ptr = hn.get("name")
                     break
         
-        # Ports
         ports_node = host_node.find("ports")
         if ports_node is not None:
             for port_node in ports_node.findall("port"):
@@ -67,13 +67,11 @@ def _parse_xml_to_models(xml_string: str) -> List[IPAddressInfo]:
                         port_info.extra_info = service_node.get("extrainfo")
                         port_info.cpe = [c.text for c in service_node.findall("cpe") if c.text]
                     
-                    # Scripts NSE
                     for script_node in port_node.findall("script"):
                         script_id = script_node.get("id", "unknown_script")
                         script_output = script_node.get("output", "")
                         port_info.scripts_output[script_id] = script_output
 
-                    # Heurística de risco automática (exemplo)
                     if state == "open":
                         if port_info.service_name in ("telnet", "ftp", "rdp"):
                             port_info.risk = "high"
@@ -84,9 +82,8 @@ def _parse_xml_to_models(xml_string: str) -> List[IPAddressInfo]:
                     
                     host_info.ports.append(port_info)
                 except (ValueError, TypeError):
-                    continue # Ignora portas malformadas
+                    continue
 
-        # Anota OS (hostscript/OS detection)
         os_node = host_node.find("os")
         if os_node is not None:
             osmatches = [osm.get("name", "") for osm in os_node.findall("osmatch")]
@@ -137,7 +134,6 @@ def _print_results(results: List[IPAddressInfo]):
             )
             print(line)
 
-            # Scripts NSE
             for script_id, output in port.scripts_output.items():
                 clean_output = ' '.join(output.strip().split())
                 print(ui.color(f"    └── {script_id}: {clean_output}", ui.GRAY))
@@ -146,9 +142,25 @@ def _print_results(results: List[IPAddressInfo]):
 
 def analyze(target: str, profile_name: str, extra_args: Optional[str] = None) -> Optional[List[IPAddressInfo]]:
     """
-    Orquestra a execução e análise do Nmap. Retorna lista de IPAddressInfo.
+    Orquestra a execução do Nmap, analisa a saída XML e retorna dados estruturados.
+
+    Esta é a função principal do módulo. Ela valida o perfil de scan solicitado,
+    constrói e executa o comando 'nmap' de forma segura, captura a saída XML,
+    chama o parser '_parse_xml_to_models' para converter o XML em objetos de
+    dados e retorna uma lista de IPAddressInfo.
+
+    Args:
+        target: O alvo (IP, hostname ou CIDR) para a varredura.
+        profile_name: O nome do perfil de scan (deve existir em settings.toml).
+        extra_args: Argumentos adicionais a serem passados para o comando nmap.
+
+    Returns:
+        Uma lista de objetos IPAddressInfo, cada um contendo informações do
+        host e uma lista de suas portas. Retorna None em caso de erro.
     """
-    profiles = config.get_section('nmap_scanner.profiles')
+    nmap_config_section = config.get_section("nmap_scanner")
+    profiles = nmap_config_section.get("profiles", {})
+    
     if profile_name not in profiles:
         print(ui.color(f"ERRO: Perfil de Nmap '{profile_name}' não encontrado no settings.toml.", ui.RED))
         return None
@@ -161,7 +173,7 @@ def analyze(target: str, profile_name: str, extra_args: Optional[str] = None) ->
     print(ui.color(f"\nExecutando Nmap com o perfil '{profile_name}'...", ui.CYAN))
     print(ui.color(f"Comando: {' '.join(command)}", ui.GRAY))
 
-    result = utils.run_command(command, timeout=900) # Timeout de 15 min
+    result = utils.run_command(command, timeout=900)
 
     if not result.success:
         print(ui.color("\n--- ERRO NA EXECUÇÃO DO NMAP ---", ui.BOLD + ui.RED))
@@ -185,34 +197,44 @@ def main():
 
     parser = argparse.ArgumentParser(description="Módulo Nmap Scanner (Híbrido & Robusto) - Batman do Cerrado")
     parser.add_argument("-t", "--target", help="Alvo (IP, hostname ou CIDR) para escanear.")
-    parser.add_argument("-p", "--profile", help="Nome do perfil a ser usado (definido em settings.toml).")
+    parser.add_argument("-p", "--profile-name", dest="profile_name", help="Nome do perfil a ser usado (definido em settings.toml).")
     parser.add_argument("--args", help="Argumentos extras para o Nmap.", default=None)
     args = parser.parse_args()
 
     ui.print_banner()
     print(ui.color("Módulo de Varredura Nmap (Híbrido & Robusto)", ui.CYAN))
 
-    if args.target and args.profile:
-        target, profile = args.target, args.profile
-        extra_args = args.args
-    else:
-        target = input(ui.color("Alvo (IP/hostname/faixa): ", ui.GREEN)).strip()
+    target = args.target
+    profile = args.profile_name
+    extra_args = args.args
+
+    if not (target and profile):
+        profiles = config.get_section('nmap_scanner').get('profiles', {})
+        if not profiles:
+            print(ui.color("ERRO: Nenhum perfil Nmap encontrado no settings.toml.", ui.RED))
+            return
+            
+        if not target:
+            target = input(ui.color("Alvo (IP/hostname/faixa): ", ui.GREEN)).strip()
         if not target:
             print(ui.color("Alvo é obrigatório.", ui.RED))
             return
         
-        profiles = config.get_section('nmap_scanner.profiles')
         print(ui.color("Perfis disponíveis:", ui.BLUE))
+        profile_keys = list(profiles.keys())
         for i, (name, cmd) in enumerate(profiles.items(), 1):
             print(f"  {i}) {ui.BOLD}{name}{ui.RESET} {ui.GRAY}({cmd}){ui.RESET}")
         
         choice = input(ui.color(f"Escolha um perfil [1-{len(profiles)}]: ", ui.GREEN)).strip()
         try:
-            profile = list(profiles.keys())[int(choice) - 1]
+            profile = profile_keys[int(choice) - 1]
         except (ValueError, IndexError):
             print(ui.color("Seleção inválida. Abortando.", ui.RED))
             return
-        extra_args = input(ui.color("Argumentos extras do Nmap (opcional): ", ui.GRAY)).strip() or None
+        
+        extra_args_input = input(ui.color("Argumentos extras do Nmap (opcional): ", ui.GRAY)).strip()
+        if extra_args_input:
+            extra_args = extra_args_input
 
     results = analyze(target, profile, extra_args)
     if results:

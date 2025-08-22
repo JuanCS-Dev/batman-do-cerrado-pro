@@ -1,34 +1,22 @@
-# Dockerfile para Batman do Cerrado - A Armadura de Contenção (Versão Final)
+# Dockerfile Final de Produção
 
-# --- ESTÁGIO 1: O "Builder" ---
+# Estágio 1: Construir o pacote
 FROM python:3.12-slim-bookworm AS builder
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    python3-dev \
-    nmap \
-    dnsutils \
-    whois \
-    iproute2 \
-    && rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN python3 -m venv /app/venv
 RUN /app/venv/bin/pip install .
 
-# --- ESTÁGIO 2: A Imagem Final ---
+# Estágio 2: Imagem final enxuta
 FROM python:3.12-slim-bookworm
 WORKDIR /app
+# Instala apenas as dependências de sistema necessárias para rodar
 RUN apt-get update && apt-get install -y --no-install-recommends \
     nmap \
     dnsutils \
     whois \
-    iproute2 \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/venv /app/venv
-COPY --from=builder /app/config /app/config
 
-# _ALTERADO_: Definimos uma variável de ambiente para que o config.py
-# saiba exatamente onde encontrar o arquivo de configuração.
-ENV BATMAN_SETTINGS_PATH="/app/config/settings.toml"
-
-ENTRYPOINT ["/bin/bash", "-c", "source /app/venv/bin/activate && batman \"$@\""]
+# O ENTRYPOINT que executa nosso programa
+ENTRYPOINT ["/app/venv/bin/batman"]

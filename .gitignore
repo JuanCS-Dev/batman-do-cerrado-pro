@@ -55,3 +55,4 @@ pytest_cache/
 
 # Arquivos de containerização, se não quiser versionar imagens locais
 *.tar
+venv/

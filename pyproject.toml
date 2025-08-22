@@ -5,9 +5,8 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-# _ALTERADO_: Nome do pacote mais profissional para publicação.
 name = "batman-do-cerrado-pro" 
-version = "2.0.0a3"
+version = "2.1.0a1"
 authors = [
     { name = "Juan Carlos", email = "juan.brainfarma@gmail.com" },
     { name = "Cora" },
@@ -19,10 +18,9 @@ dependencies = [
     "tomli; python_version < '3.11'",
     "requests>=2.28.0",
     "ipwhois>=1.2.0",
+    "watchdog>=4.0.0", # <--- ADICIONADO: Dependência para o fs_monitor
 ]
-# _ALTERADO_: Referência explícita ao arquivo de licença.
 license = { file = "LICENSE" }
-# _ALTERADO_: Classificadores mais detalhados para melhor descoberta no PyPI.
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
@@ -49,13 +47,18 @@ batman = "batman_do_cerrado.cli:main"
 "Bug Tracker" = "https://github.com/JuanCS-Dev/batman-do-cerrado-pro/issues"
 
 [tool.setuptools]
-# _ADICIONADO_: Instrução para incluir arquivos que não são .py definidos abaixo.
 include-package-data = true
 
 [tool.setuptools.packages.find]
 exclude = ["tests*"]
 
-# _ADICIONADO_: Diz explicitamente ao setuptools para empacotar quaisquer arquivos .toml
-# que ele encontrar dentro dos subdiretórios do pacote.
 [tool.setuptools.package-data]
 "batman_do_cerrado" = ["**/*.toml"]
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov",
+    "pytest-mock",
+    "watchdog>=4.0.0", # <--- ADICIONADO: Dependência de teste
+]

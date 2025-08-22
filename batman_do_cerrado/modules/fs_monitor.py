@@ -23,9 +23,11 @@ except ImportError:
     sys.exit(1)
 
 from batman_do_cerrado.core import ui, utils
-from batman_do_cerrado.core.config import PROJECT_ROOT as CORE_PROJECT_ROOT
 from batman_do_cerrado.core.config import config
 from batman_do_cerrado.core.models import Finding
+
+# Obtém a raiz do projeto de forma robusta
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 @dataclass
 class FileState:
@@ -46,14 +48,13 @@ class FileSystemMonitor:
         self.paths_to_watch = config.get('fs_monitor', 'default_paths', [])
         self.suid_allowlist = set(config.get('fs_monitor', 'suid_allowlist', []))
         self.exclude_globs = config.get('fs_monitor', 'default_excludes', [])
-        self.baseline_path = CORE_PROJECT_ROOT / "data" / "baselines" / "fs_baseline.json"
+        self.baseline_path = PROJECT_ROOT / "data" / "baselines" / "fs_baseline.json"
         self.baseline: Dict[str, FileState] = self._load_baseline()
         self.hash_max_bytes = 5 * 1024 * 1024
-        self.event_history: Dict[str, float] = {}  # path -> last event timestamp
-
-        # Debounce: não alerta mais de uma vez por X segundos para o mesmo arquivo/evento
+        self.event_history: Dict[str, float] = {}
         self.debounce_seconds = config.get('fs_monitor', 'debounce_seconds', 10)
 
+    # Função de hash movida para dentro da classe como um método privado.
     def _hash_file(self, path: Path) -> Optional[str]:
         h = hashlib.sha256()
         try:
@@ -106,7 +107,6 @@ class FileSystemMonitor:
         return True
 
     def scan_integrity(self) -> List[Finding]:
-        # Scanner periódico: varredura completa (baseline)
         findings: List[Finding] = []
         current_paths_on_disk = set()
         for watch_path_str in self.paths_to_watch:
@@ -150,11 +150,9 @@ class FileSystemMonitor:
     def handle_event(self, event: FileSystemEvent):
         path = Path(event.src_path)
         if any(path.match(pattern) for pattern in self.exclude_globs):
-            return  # Excluído via glob
-        # Só alerta se for relevante e não for flood
+            return
         if not self._should_alert(str(path), event.event_type):
             return
-        # Consulta estado atual e compara com baseline
         old_state = self.baseline.get(str(path))
         new_state = self._get_current_state(path)
         findings = []
@@ -193,7 +191,7 @@ class HybridFsEventHandler(FileSystemEventHandler):
     def on_created(self, event): self.monitor.handle_event(event)
     def on_deleted(self, event): self.monitor.handle_event(event)
     def on_modified(self, event): self.monitor.handle_event(event)
-    def on_moved(self, event):  # Moved = deleted + created
+    def on_moved(self, event):
         self.monitor.handle_event(event)
 
 def _print_findings(findings: List[Finding]):
@@ -229,7 +227,7 @@ def start_hybrid_monitor():
 
     def periodic_scan():
         while True:
-            time.sleep(60)  # Scanner a cada 60s (ajustável)
+            time.sleep(60)
             findings = monitor.scan_integrity()
             _print_findings(findings)
 

@@ -1,64 +1,89 @@
-# batman-do-cerrado-pro/batman_do_cerrado/core/ui.py
+# batman_do_cerrado/core/ui.py
 
 """
-Módulo Core UI - A fonte de verdade para toda a interface do usuário no terminal.
-
-Centraliza cores, banners e funções de interação para manter a identidade visual
-consistente em todo o framework "Batman do Cerrado".
+Módulo Core UI - Central de Cores, Banners e Componentes de Interface.
 """
 
-import os
 import sys
-from typing import List
+import time
+import itertools
+from threading import Thread, Event
 
-# --- Constantes de Cores ANSI ---
-RESET = "\033[0m"
-BOLD = "\033[1m"
-CYAN = "\033[96m"
-GREEN = "\033[92m"
-YELLOW = "\033[93m"
-RED = "\033[91m"
+# --- Constantes de Cores (Fallback se a biblioteca falhar) ---
+# (código das constantes de cores inalterado)
+BLACK, RED, GREEN, YELLOW, BLUE, MAGENTA, CYAN, WHITE = (f"\033[{i}m" for i in range(30, 38))
+BOLD, RESET = "\033[1m", "\033[0m"
 GRAY = "\033[90m"
-BLUE = "\033[94m"
-MAGENTA = "\033[95m"
 
-# --- Funções de UI ---
+def color(text: str, *styles: str) -> str:
+    """Aplica múltiplos estilos de cor/formatação a um texto."""
+    style_str = "".join(styles)
+    return f"{style_str}{text}{RESET}"
 
-def color(text: str, col: str) -> str:
-    """Aplica uma cor ANSI a um texto."""
-    return f"{col}{text}{RESET}"
+def print_banner():
+    """Imprime o banner principal do programa."""
+    banner_text = r"""
+🦇 Batman do Cerrado
+      ____              _            _            
+     |  _ \            | |          | |           
+     | |_) | __ _ _ __ | | __ _ _ __| | ___  ___  
+     |  _ < / _` | '_ \| |/ _` | '__| |/ _ \/ __| 
+     | |_) | (_| | |   <| | (_| | |  | |  __/\__ \ 
+     |____/ \__,_|_|  \_\_|\__,_|_|  |_|\___||___/ 
+Self-system security • OSINT/Forensics • Linux-first
+    """
+    print(color(banner_text, BOLD, YELLOW))
 
-def clear_screen() -> None:
-    """Limpa a tela do terminal de forma portável."""
-    if os.name == "nt":
-        os.system("cls")
-    elif os.environ.get("TERM"):
-        os.system("clear")
-    else:
-        # Fallback para ambientes sem 'clear' (ex: CI/CD)
-        print("\n" * 100)
+def clear_screen():
+    """Limpa a tela do terminal."""
+    print("\033[H\033[J", end="")
 
-def pause(msg: str = "Pressione Enter para continuar...") -> None:
-    """Pausa a execução até o usuário pressionar Enter."""
-    try:
-        input(color(f"\n{msg}", GRAY))
-    except (EOFError, KeyboardInterrupt):
-        # Lida com interrupções de forma graciosa
-        print()
-        sys.exit(0)
+def pause():
+    """Pausa a execução e espera o usuário pressionar Enter."""
+    input(color("\nPressione Enter para continuar...", GRAY))
 
-def print_banner() -> None:
-    """Exibe o cabeçalho ASCII do Batman do Cerrado."""
-    art = [
-        r"      ____        _                       _            ",
-        r"     |  _ \      | |                     | |           ",
-        r"     | |_) | __ _| |_ __ _ _ __ ___   ___| | ___  ___  ",
-        r"     |  _ < / _` | __/ _` | '_ ` _ \ / _ \ |/ _ \/ __| ",
-        r"     | |_) | (_| | || (_| | | | | | |  __/ |  __/\__ \ ",
-        r"     |____/ \__,_|\__\__,_|_| |_| |_|\___|_|\___||___/ ",
-    ]
-    print(color(BOLD + "🦇 Batman do Cerrado" + RESET, CYAN))
-    for line in art:
-        print(color(line, GRAY))
-    print(color("Self‑system security • OSINT/Forensics • Linux-first", GRAY))
-    print()
+# _ADICIONADO_: Classe de Spinner para feedback visual em operações longas.
+class Spinner:
+    """
+    Um spinner de terminal simples que roda em uma thread separada.
+    Uso:
+        with Spinner("Carregando..."):
+            time.sleep(5)
+    """
+    def __init__(self, message: str = "Processando...", delay: float = 0.1):
+        self.message = message
+        self.delay = delay
+        self._spinner = itertools.cycle(['⠇', '⠏', '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧'])
+        self._stop_event = Event()
+        self._thread = Thread(target=self._spin, daemon=True)
+
+    def _spin(self):
+        """Função interna que roda na thread, atualizando o spinner."""
+        while not self._stop_event.is_set():
+            spin_char = next(self._spinner)
+            # \r move o cursor para o início da linha
+            sys.stdout.write(f"\r{color(spin_char, YELLOW)} {self.message} ")
+            sys.stdout.flush()
+            time.sleep(self.delay)
+
+    def start(self):
+        """Inicia a animação do spinner."""
+        self._thread.start()
+
+    def stop(self):
+        """Para a animação do spinner e limpa a linha."""
+        self._stop_event.set()
+        # Espera a thread terminar para evitar sobreposição de prints
+        if self._thread.is_alive():
+            self._thread.join()
+        # Limpa a linha do spinner
+        sys.stdout.write(f"\r{' ' * (len(self.message) + 5)}\r")
+        sys.stdout.flush()
+
+    # Permite o uso com 'with' (ex: with Spinner(...):)
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.stop()

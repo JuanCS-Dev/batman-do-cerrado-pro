@@ -41,11 +41,12 @@ class _TitleParser(HTMLParser):
 def _parse_spf(txt_records: List[str]) -> Optional[Dict[str, Any]]:
     """Encontra e parseia o registro SPF a partir de uma lista de registros TXT."""
     for record in txt_records:
-        if record.lower().startswith('"v=spf1'):
-            # Limpa as aspas que o dig às vezes retorna
-            clean_record = record.strip('"')
-            mechanisms = [part for part in clean_record.split() if not part.startswith("exp=")]
-            return {"raw": clean_record, "mechanisms": mechanisms}
+        # <--- CORRIGIDO: Agora verifica se a string começa com 'v=spf1'
+        # ignorando as aspas duplas, se existirem.
+        clean_record = record.strip('"').lower()
+        if clean_record.startswith("v=spf1"):
+            mechanisms = [part for part in record.strip('"').split() if not part.startswith("exp=")]
+            return {"raw": record.strip('"'), "mechanisms": mechanisms}
     return None
 
 def _parse_dmarc(dmarc_records: List[str]) -> Optional[Dict[str, Any]]:
@@ -221,10 +222,6 @@ def _print_results(info: DomainInfo):
     tls = info.raw_data.get("tls", {})
     if "error" in http:
         print(f"  {'HTTP (porta 80):':<25} Erro: {http['error']}")
-    else:
-        print(f"  {'HTTP (porta 80):':<25} Status {http.get('status_code', '-')}, Redireciona para -> {http.get('redirect_location', 'N/A')}")
-    if "error" in https:
-        print(f"  {'HTTPS (porta 443):':<25} Erro: {https['error']}")
     else:
         print(f"  {'HTTPS (porta 443):':<25} Status {https.get('status_code', '-')}, Título: '{https.get('title', 'N/A')}'")
     if tls:

@@ -68,4 +68,40 @@ syn_recv_threshold = 60
 
 [secrets_scanner]
 # Caminho para o arquivo de regras do scanner de segredos.
+# A melhor abordagem é ter as regras em um arquivo JSON separado.
 rules_file = "rules/default_rules.json"
+
+# Exclui arquivos binários e diretórios comuns de desenvolvimento.
+exclude_globs = [
+    '*.exe',
+    '*.zip',
+    '*.7z',
+    '*.rar',
+    '*.tar.gz',
+    '*.iso',
+    '*.bin',
+    '*.dll',
+    '*.so',
+    '*.sqlite',
+    '*.db',
+    '*.log',
+    '*.lock',
+    '*.mp4',
+    '*.mov',
+    '*.mp3',
+    '*.avi',
+    '*.flac',
+    '*.wav',
+    '*.mkv',
+    '*/.git/*',
+    '*/.venv/*',
+    '*/node_modules/*',
+    '*/__pycache__/*',
+]
+
+# Lista de padrões a serem ignorados para reduzir falsos positivos
+# Geralmente chaves de API de teste ou padrões em código-fonte de bibliotecas
+excluded_patterns = []
+
+# Tamanho máximo do arquivo para escanear em MB
+max_file_size_mb = 5

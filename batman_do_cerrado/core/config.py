@@ -1,30 +1,10 @@
-# batman-do-cerrado-pro/batman_do_cerrado/core/config.py
-
-"""
-Módulo Core Config - Ponto de acesso único para todas as configurações.
-"""
+# batman-do-cerrado-pro/batman_do_cerrado/core/config.py (Versão Kamikaze)
 
 import os
-from pathlib import Path
+import sys
 from typing import Any, Dict, Optional
+from importlib import resources
 
-# ===================================================================
-# ================= BLOCO DE DEPURAÇÃO ADICIONADO ===================
-print("--- DEBUG: Iniciando a execução de core/config.py ---", flush=True)
-settings_path_from_env = os.environ.get("BATMAN_SETTINGS_PATH")
-print(f"DEBUG: Valor lido da variável de ambiente 'BATMAN_SETTINGS_PATH': {settings_path_from_env}", flush=True)
-if settings_path_from_env:
-    p = Path(settings_path_from_env)
-    print(f"DEBUG: Objeto Path criado: {p}", flush=True)
-    print(f"DEBUG: Verificando se o arquivo existe com p.is_file()...", flush=True)
-    is_file_result = p.is_file()
-    print(f"DEBUG: Resultado de p.is_file(): {is_file_result}", flush=True)
-print("--- FIM DO BLOCO DE DEPURAÇÃO ---", flush=True)
-# ===================================================================
-# ===================================================================
-
-
-# Tratamento de compatibilidade para a biblioteca TOML
 try:
     import tomllib
 except ImportError:
@@ -37,36 +17,30 @@ class Config:
     def __new__(cls, *args, **kwargs):
         if not cls._instance:
             cls._instance = super().__new__(cls)
-            config_path = cls._instance._find_config_path()
-            cls._instance._load_config(config_path)
+            cls._instance._load_config()
         return cls._instance
 
-    def _find_config_path(self) -> Optional[Path]:
-        if env_path_str := os.environ.get("BATMAN_SETTINGS_PATH"):
-            env_path = Path(env_path_str)
-            if env_path.is_file():
-                return env_path
-
-        cwd = Path.cwd()
-        possible_paths = [
-            cwd / "config" / "settings.toml",
-            cwd.parent / "config" / "settings.toml",
-        ]
-        for path in possible_paths:
-            if path.is_file():
-                return path
-        
-        return None
-
-    def _load_config(self, path: Optional[Path]):
-        if not path or not path.is_file():
-            print(f"AVISO: Arquivo de configuração não encontrado. Operando com configurações padrão.", flush=True)
-            self._config = {}
-            return
-
-        print(f"INFO: Carregando configuração de {path}", flush=True)
-        with open(path, "rb") as f:
-            self._config = tomllib.load(f)
+    def _load_config(self):
+        """
+        Carrega o arquivo TOML. Se falhar, imprime o erro exato e aborta.
+        """
+        try:
+            config_file = resources.files('batman_do_cerrado.config').joinpath('settings.toml')
+            with config_file.open('rb') as f:
+                self._config = tomllib.load(f)
+        except Exception as e:
+            # _ALTERADO_: Este bloco agora é barulhento e fatal.
+            print("--- ERRO FATAL AO CARREGAR A CONFIGURAÇÃO ---", file=sys.stderr)
+            try:
+                # Tenta imprimir o caminho do arquivo para referência
+                print(f"ARQUIVO: {resources.files('batman_do_cerrado.config').joinpath('settings.toml')}", file=sys.stderr)
+            except Exception:
+                print("ARQUIVO: Não foi possível determinar o caminho do arquivo de configuração.", file=sys.stderr)
+            
+            print(f"TIPO DE ERRO: {type(e).__name__}", file=sys.stderr)
+            print(f"MENSAGEM: {e}", file=sys.stderr)
+            print("-------------------------------------------------", file=sys.stderr)
+            sys.exit(1) # Aborta a execução imediatamente.
 
     def get(self, section: str, key: str, fallback: Any = None) -> Any:
         return self._config.get(section, {}).get(key, fallback)

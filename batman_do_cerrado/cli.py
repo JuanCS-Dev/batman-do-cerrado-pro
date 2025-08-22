@@ -19,8 +19,18 @@ from .core.dispatcher import run_module
 from .core.models import IPAddressInfo, DomainInfo, Finding
 from .core.config import config
 
-# ... (Helpers de UI e Funções de Impressão permanecem os mesmos) ...
-# (Vou omiti-los aqui por brevidade, mas eles estão no arquivo completo abaixo)
+# Importa os módulos principais
+from .modules import (
+    ip_analyzer,
+    domain_analyzer,
+    nmap_scanner,
+    whois_helpers,
+    selfcheck,
+    fs_monitor,
+    net_monitor,
+    secrets_scanner, # <--- Importa o novo módulo
+)
+
 
 # ======================================================
 # Emojis, Cores, e Helpers com Design Moderno
@@ -104,6 +114,13 @@ def _print_ip_dossier(info: IPAddressInfo) -> None:
         print(_kv("Cidade:", getattr(info, "city", None)))
         print(_kv("Região/Estado:", getattr(info, "region", None)))
         print(_kv("País:", getattr(info, "country_code", None)))
+        
+        # _ALTERADO_: Gera e exibe o link do Google Maps se tivermos as coordenadas.
+        lat, lon = getattr(info, "latitude", None), getattr(info, "longitude", None)
+        if lat is not None and lon is not None:
+            maps_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+            print(_kv("Mapa:", maps_link))
+            
         rep = (getattr(info, "raw_data", {}) or {}).get("reputation", {})
         if rep:
             print(c(f"\n{_emoji('shield')}  Reputação (AbuseIPDB)", _get("BLUE", ""), _get("BOLD", "")))
@@ -136,181 +153,101 @@ def _print_domain_dossier(info: DomainInfo) -> None:
         print(c(f"\n{_emoji('mail')}  Análise de E-mail", _get("BLUE", ""), _get("BOLD", "")))
         mx = getattr(info, "mx_records", []) or []
         print(_kv("MX:", ", ".join(r.get("raw", "") for r in mx) if mx else "Nenhum"))
-        print(_kv("SPF:", (getattr(info, "spf", {}) or {}).get("raw", "Não encontrado")))
-        print(_kv("DMARC:", (getattr(info, "dmarc", {}) or {}).get("raw", "Não encontrado")))
-        axfr_open = bool(getattr(info, "is_axfr_open", False))
-        axfr, axfr_col = ("ABERTA (VULNERÁVEL!)", _get("RED", "")) if axfr_open else ("Fechada", _get("GREEN", ""))
-        print(_kv("AXFR:", c(axfr, axfr_col, _get("BOLD", ""))))
-        print()
-    except Exception as e:
-        print(c(f"{_emoji('err')}  Erro ao exibir dossiê do domínio: {e}", _get("RED", ""), _get("BOLD", "")))
-
-def _print_findings_list(findings: List[Finding]) -> None:
-    try:
-        print()
-        magenta = _get("MAGENTA", _get("BLUE", ""))
-        _highlight_box([f"{_emoji('file')}  Achados"], color=magenta)
-        print(_rule(color=magenta))
-        if not findings:
-            print(c("  (sem achados)", _get("GRAY", ""), _get("BOLD", ""))); return
-        for f in findings:
-            level = (f.severity or "").lower()
-            if level == "critical": badge = c(f"[{level.upper()}]", _get("RED", ""), _get("BOLD", "")) + " " + _emoji("err")
-            elif level in ("high", "medium"): badge = c(f"[{level.upper()}]", _get("YELLOW", ""), _get("BOLD", "")) + " " + _emoji("warn")
-            else: badge = c(f"[{level.upper()}]", _get("GREEN", ""), _get("BOLD", "")) + " " + _emoji("ok")
-            print(f"\n  {badge} {getattr(f, 'description', '')}")
-            print(_kv("Alvo:", getattr(f, "target", None)))
-            print(_kv("Módulo/Tipo:", f"{getattr(f, 'module', '')} / {getattr(f, 'finding_type', '')}"))
-            for k, v in (getattr(f, "details", {}) or {}).items():
-                print(_kv(k.replace('_', ' ').capitalize() + ":", v))
-        print()
-    except Exception as e:
-        print(c(f"{_emoji('err')}  Erro ao exibir achados: {e}", _get("RED", ""), _get("BOLD", "")))
-
-def _print_results(results: Any) -> None:
-    try:
-        if not results:
-            print(c(f"\n{_emoji('warn')}  Nenhum resultado retornado pelo módulo.", _get("YELLOW", ""), _get("BOLD", ""))); return
-        if isinstance(results, IPAddressInfo): _print_ip_dossier(results)
-        elif isinstance(results, DomainInfo): _print_domain_dossier(results)
-        elif isinstance(results, list) and results and isinstance(results[0], Finding): _print_findings_list(results)
-        else:
-            print(c(f"\n{_emoji('info')}  Resultado genérico", _get("CYAN", ""), _get("BOLD", ""))); from pprint import pprint; pprint(results)
-    except Exception as e:
-        print(c(f"{_emoji('err')}  Erro ao exibir resultados: {e}", _get("RED", ""), _get("BOLD", "")))
-
-# ======================================================
-# Menu interativo (UI Moderna)
-# ======================================================
-def interactive_menu() -> None:
-    try:
-        # _ALTERADO_: A limpeza de tela foi restaurada agora que a depuração terminou.
-        ui.clear_screen()
-        ui.print_banner()
-        print(_rule(color=_get("CYAN", "")))
-        print(c(f"{_emoji('bat')}  BATMAN DO CERRADO", _get("BOLD", ""), _get("CYAN", "")) + "   " + c("Segurança & OSINT Suite", _get("GRAY", "")))
-        print(c("          author: Juan Carlos", _get("BOLD", ""), _get("YELLOW", "")))
-        print(_rule(color=_get("CYAN", "")))
-        print(c(f"{_emoji('info')}  Selecione um módulo para iniciar a análise:", _get("BOLD", ""), _get("WHITE", "")))
-
-        menu_items: Dict[str, Dict[str, Any]] = {
-            "1": {"name": "ip_analyzer", "desc": "Dossiê completo para um endereço IP.", "icon": "target", "sudo": False},
-            "2": {"name": "domain_analyzer", "desc": "Análise OSINT completa para um domínio.", "icon": "search", "sudo": False},
-            "3": {"name": "nmap_scanner", "desc": "Varredura Nmap com perfis customizáveis.", "icon": "scan", "sudo": False},
-            "4": {"name": "fs_monitor", "desc": "Integridade de arquivos em tempo real. (sudo)", "icon": "file", "sudo": True},
-            "5": {"name": "net_monitor", "desc": "Monitoramento de rede em tempo real. (sudo)", "icon": "net", "sudo": True},
-            "9": {"name": "ai_auditor", "desc": "Protocolo Oráculo (em breve).", "icon": "spark", "sudo": False, "wip": True},
-        }
-
-        def menu_section(title, keys, color):
-            print()
-            print(c(f"  {title}", color, _get("BOLD", "")))
-            for key in keys:
-                item = menu_items[key]
-                tag = c(" (em breve)", _get("GRAY", ""), _get("BOLD", "")) if item.get("wip") else ""
-                sudo = c(" (Requer sudo)", _get("YELLOW", ""), _get("BOLD", "")) if item.get("sudo") else ""
-                icon = _emoji(item["icon"])
-                print(f"   {c(key, _get('GREEN',''), _get('BOLD',''))}) {icon} {c(item['name'], _get('BOLD',''), color)}  {c('— ' + item['desc'], _get('GRAY',''))}{sudo}{tag}")
-
-        menu_section("[ ANÁLISE E OSINT ]", ("1", "2", "3"), _get("CYAN", ""))
-        menu_section("[ DEFESA E MONITORAMENTO ]", ("4", "5"), _get("MAGENTA", ""))
-        menu_section("[ INTELIGÊNCIA ARTIFICIAL ]", ("9",), _get("YELLOW", ""))
-        print(_rule(color=_get("GRAY", "")))
-        choice = input(c(f"{_emoji('arrow')}  Escolha uma opção (ou 'q' para sair): ", _get("CYAN", ""), _get("BOLD", ""))).strip()
+        spf = getattr(info, "spf_record", {}) or {}
+        print(_kv("SPF:", spf.get("raw", "Nenhum")))
+        dmarc = getattr(info, "dmarc_record", {}) or {}
+        print(_kv("DMARC:", dmarc.get("raw", "Nenhum")))
         
-        if choice.lower() in ("q", "quit", "sair"): print(); sys.exit(0)
+        http_data = getattr(info, "http_info", {}) or {}
+        if http_data:
+            print(c(f"\n{_emoji('arrow')}  Análise HTTP", _get("BLUE", ""), _get("BOLD", "")))
+            print(_kv("Status Code:", http_data.get("status_code")))
+            print(_kv("Título:", http_data.get("title", "N/A")))
+            print(_kv("Servidor:", http_data.get("headers", {}).get("Server", "N/A")))
+            if http_data.get("redirect_location"):
+                print(_kv("Redireciona para:", http_data.get("redirect_location")))
+
+        cert_data = getattr(info, "tls_info", {}) or {}
+        if cert_data:
+            print(c(f"\n{_emoji('star')}  Certificado TLS/SSL", _get("BLUE", ""), _get("BOLD", "")))
+            print(_kv("Emissor:", cert_data.get("issuer", {}).get("organizationName", "N/A")))
+            print(_kv("Válido até:", cert_data.get("valid_until", "N/A")))
+            print(_kv("Domínios Alternativos (SAN):", ", ".join(cert_data.get("sans", [])) or "N/A"))
+
+        subdomains = getattr(info, "subdomains", [])
+        if subdomains:
+            print(c(f"\n{_emoji('target')}  Subdomínios Encontrados", _get("BLUE", ""), _get("BOLD", "")))
+            print("  " + c(" ".join(subdomains), _get("WHITE", "")))
         
-        selected = menu_items.get(choice) or next((it for it in menu_items.values() if it["name"] == choice), None)
-        if not selected:
-            print(c(f"{_emoji('err')}  Opção inválida.", _get("RED", ""), _get("BOLD", ""))); time.sleep(1); interactive_menu(); return
-
-        module_name = selected["name"]
-        kwargs: Dict[str, Any] = {}
-
-        # _ALTERADO_: Lógica refatorada para a nova ordem dos prompts.
-        if module_name in ("ip_analyzer", "domain_analyzer"):
-            prompt = f"  {_emoji('target')}  Alvo para '{module_name}': "
-            kwargs["target"] = input(c(prompt, _get("GREEN", ""), _get("BOLD", ""))).strip()
-            if not kwargs["target"]:
-                print(c(f"{_emoji('err')}  Alvo é obrigatório.", _get("RED", ""))); time.sleep(1); interactive_menu(); return
-
-        elif module_name == "nmap_scanner":
-            profiles = config.get_section("nmap_scanner.profiles")
-            if not profiles:
-                print(c(f"{_emoji('err')}  Nenhum perfil Nmap encontrado no settings.toml.", _get("RED", ""))); time.sleep(1); interactive_menu(); return
-            
-            keys = list(profiles.keys())
-            print(c(f"\n{_emoji('scan')}  Perfis de varredura disponíveis:", _get("BLUE", "")))
-            for i, name in enumerate(keys, 1):
-                print(f"   {c(str(i)+')', _get('GREEN',''), _get('BOLD',''))} {c(name, _get('BOLD',''))} {c('('+profiles[name]+')', _get('GRAY',''))}")
-            
-            choice_idx = input(c(f"  {_emoji('gear')}  Escolha um perfil [1-{len(keys)}]: ", _get("GREEN", ""))).strip()
-            try:
-                kwargs["profile_name"] = keys[int(choice_idx) - 1]
-            except Exception:
-                print(c(f"{_emoji('err')}  Seleção inválida.", _get("RED", ""))); time.sleep(1); interactive_menu(); return
-
-            prompt = f"  {_emoji('target')}  Alvo para a varredura '{kwargs['profile_name']}': "
-            kwargs["target"] = input(c(prompt, _get("GREEN", ""), _get("BOLD", ""))).strip()
-            if not kwargs["target"]:
-                print(c(f"{_emoji('err')}  Alvo é obrigatório.", _get("RED", ""))); time.sleep(1); interactive_menu(); return
-
-        try:
-            results = run_module(module_name, **kwargs)
-        except Exception as e:
-            print(c(f"{_emoji('err')}  Erro ao executar módulo '{module_name}': {e}", _get("RED", ""))); results = None
-
-        _print_results(results)
-
-    except (KeyboardInterrupt, EOFError):
-        print(c("\nOperação cancelada.", _get("YELLOW", ""), _get("BOLD", ""))); sys.exit(0)
+        print()
     except Exception as e:
-        print(c(f"{_emoji('err')}  Erro inesperado: {e}", _get("RED", ""), _get("BOLD", ""))); sys.exit(1)
+        print(c(f"{_emoji('err')}  Erro ao exibir dossiê do Domínio: {e}", _get("RED", ""), _get("BOLD", "")))
 
-    ui.pause()
-    interactive_menu()
 
 # ======================================================
-# Entry point (subcomandos)
+# Lógica do CLI
 # ======================================================
-def main() -> None:
-    is_root = hasattr(os, "geteuid") and os.geteuid() == 0
-    parser = argparse.ArgumentParser(description="Batman do Cerrado — Suíte de Segurança Pessoal", formatter_class=argparse.RawTextHelpFormatter)
-    subparsers = parser.add_subparsers(dest="module", help="Módulo a ser executado")
+
+def main():
+    """
+    Ponto de entrada do CLI, usando subcomandos.
+    """
+    parser = argparse.ArgumentParser(
+        description=f"{_emoji('bat')} Batman do Cerrado PRO - Suíte de Segurança Pessoal",
+        epilog=f"Use '{os.path.basename(sys.argv[0])} <comando> -h' para ajuda sobre um comando específico."
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Comandos de análise e monitoramento")
+
+    # Comando 'ip'
+    ip_parser = subparsers.add_parser("ip", help="Realiza uma análise completa em um IP.", aliases=["ip-scan"])
+    ip_parser.add_argument("target", help="Endereço IP para análise.")
+    ip_parser.set_defaults(func=lambda args: _print_ip_dossier(ip_analyzer.analyze(args.target)))
+
+    # Comando 'domain'
+    domain_parser = subparsers.add_parser("domain", help="Realiza uma análise completa em um domínio.")
+    domain_parser.add_argument("target", help="Domínio para análise (ex: exemplo.com).")
+    domain_parser.set_defaults(func=lambda args: _print_domain_dossier(domain_analyzer.analyze(args.target)))
+
+    # Comando 'nmap'
+    nmap_parser = subparsers.add_parser("nmap", help="Realiza um escaneamento de portas rápido em um IP/host.")
+    nmap_parser.add_argument("target", help="IP ou host para escanear.")
+    nmap_parser.add_argument("-p", "--ports", help="Portas para escanear (ex: 80,443,1000-2000).")
+    nmap_parser.set_defaults(func=lambda args: whois_helpers.run_and_print_nmap(args.target, args.ports))
+
+    # Comando 'whois'
+    whois_parser = subparsers.add_parser("whois", help="Consulta os dados de registro WHOIS de um IP ou domínio.")
+    whois_parser.add_argument("target", help="Endereço IP ou domínio.")
+    whois_parser.set_defaults(func=lambda args: whois_helpers.run_and_print_whois(args.target))
+
+    # Comando 'fs-monitor'
+    fs_parser = subparsers.add_parser("fs-monitor", help="Monitora o sistema de arquivos para mudanças e novos binários SUID.")
+    fs_parser.add_argument("--mode", choices=["baseline", "scan", "monitor"], default="monitor", help="Modo de operação.")
+    fs_parser.set_defaults(func=lambda args: fs_monitor.main_cli(args.mode))
+
+    # Comando 'net-monitor'
+    net_parser = subparsers.add_parser("net-monitor", help="Monitora o tráfego de rede e novas conexões.")
+    net_parser.set_defaults(func=lambda args: net_monitor.main_cli())
+    
+    # Comando 'selfcheck'
+    selfcheck_parser = subparsers.add_parser("selfcheck", help="Executa o autodiagnóstico do sistema.")
+    selfcheck_parser.set_defaults(func=lambda args: selfcheck.analyze())
+
+    # Comando 'secrets-scan' <--- NOVO COMANDO
+    secrets_parser = subparsers.add_parser("secrets-scan", help="Varre o sistema de arquivos por segredos e credenciais.")
+    secrets_parser.add_argument("target", nargs="?", help="Caminho do arquivo ou diretório para varrer.")
+    secrets_parser.set_defaults(func=lambda args: secrets_scanner.main())
+
 
     if len(sys.argv) == 1:
-        interactive_menu(); return
+        parser.print_help(sys.stderr)
+        sys.exit(1)
 
-    subparsers.required = True
-
-    p_ip = subparsers.add_parser("ip_analyzer", help="Dossiê completo para um IP.", aliases=["ip"])
-    p_ip.add_argument("target", help="Endereço IP a ser analisado.")
-    p_domain = subparsers.add_parser("domain_analyzer", help="Análise OSINT para um domínio.", aliases=["domain"])
-    p_domain.add_argument("target", help="Domínio a ser analisado.")
-    p_nmap = subparsers.add_parser("nmap_scanner", help="Varredura Nmap.", aliases=["nmap"])
-    p_nmap.add_argument("target", help="Alvo da varredura.")
-    p_nmap.add_argument("-p", "--profile", required=True, help="Perfil de scan (definido em settings.toml).")
-    p_fs = subparsers.add_parser("fs_monitor", help="Monitor de integridade de arquivos.", aliases=["fs"])
-    if not is_root: p_fs.epilog = c("Sugestão: execute como root para mais sinal.", _get("YELLOW", ""))
-    p_net = subparsers.add_parser("net_monitor", help="Monitor de rede.", aliases=["net"])
-    if not is_root: p_net.epilog = c("Sugestão: execute como root para mais sinal.", _get("YELLOW", ""))
-    
     args = parser.parse_args()
-
-    alias_map = { "ip": "ip_analyzer", "domain": "domain_analyzer", "nmap": "nmap_scanner", "fs": "fs_monitor", "net": "net_monitor" }
-    module = alias_map.get(args.module, args.module)
-    
-    params: Dict[str, Any] = vars(args).copy()
-    params.pop("module", None)
-    if module == "nmap_scanner" and "profile" in params:
-        params["profile_name"] = params.pop("profile")
-
-    try:
-        results = run_module(module, **params)
-    except Exception as e:
-        print(c(f"{_emoji('err')}  Erro ao executar módulo '{module}': {e}", _get("RED", ""))); results = None
-    
-    _print_results(results)
+    if hasattr(args, "func"):
+        args.func(args)
+    else:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
